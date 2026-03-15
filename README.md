@@ -18,7 +18,7 @@ Memory Slice captures the complete forensic state of a single operating system p
 | Format | Link |
 |--------|------|
 | Markdown | [Memory_Slice_Specification.md](Memory_Slice_Specification.md) |
-| PDF | [Memory_Slice-1.pdf](Memory_Slice_Specification.pdf) |
+| PDF | [Memory_Slice_Specification.pdf](Memory_Slice_Specification.pdf) |
 
 **Version:** draft-2026-03 (Working Draft)
 

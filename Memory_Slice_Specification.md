@@ -1,6 +1,6 @@
 # Memory Slice (.msl) — Binary Format Specification
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Status:** Working Draft
 
 ---
@@ -45,6 +45,7 @@ This specification accompanies the research paper *Memory Slice: A Process-Centr
    - 5.4 Process Identity (`0x0040`)
    - 5.5 Related Dump (`0x0041`)
    - 5.6 Key Hint (`0x0020`)
+   - 5.7 Thread Context (`0x0011`)
 6. **Investigation Mode**
    - 6.1 Block Ordering
    - 6.2 System Context Block (`0x0050`)
@@ -378,7 +379,7 @@ When the `Compressed` flag is set, only the payload portion (bytes after the 80-
 | `0x0001` | Memory Region       | Per-page memory (Sec. 5.1). |
 | `0x0002` | Module Entry        | Module metadata (Sec. 5.2). |
 | `0x0010` | Module List Index   | Module manifest (Sec. 5.3). **MUST** be Block 1. |
-| `0x0011` | Thread Context      | Register state. |
+| `0x0011` | Thread Context      | Register state (Sec. 5.7). |
 | `0x0012` | File Descriptor     | Open handle. |
 | `0x0013` | Network Connection  | Socket attribution. |
 | `0x0014` | Environment Block   | Env vars. |
@@ -395,7 +396,7 @@ When the `Compressed` flag is set, only the payload portion (bytes after the 80-
 | `0x1001` | VAS Map             | Reconstructed virtual address space. |
 | `0x1003` | Pointer Graph       | Pointer relationships. |
 
-Block types listed without a section reference (e.g., `0x0011`–`0x0015`, `0x1001`, `0x1003`) are reserved type codes whose payload formats will be defined in future versions of this specification. Producers **MUST NOT** emit these types until their payloads are specified. Consumers **MUST** skip them via `BlockLength`.
+Block types listed without a section reference (e.g., `0x0012`–`0x0015`, `0x1001`, `0x1003`) are reserved type codes whose payload formats will be defined in future versions of this specification. Producers **MUST NOT** emit these types until their payloads are specified. Consumers **MUST** skip them via `BlockLength`.
 
 ### 4.4 Integrity Chain (`PrevHash`)
 
@@ -586,6 +587,46 @@ A Key Hint block annotates a region of captured memory that is believed to conta
 | `0x0008` | WireGuard |
 | `0x0009` | PQ-TLS (hybrid) |
 | `0xFFFF` | Other |
+
+---
+
+### 5.7 Thread Context (`0x0011`)
+
+A Thread Context block records the execution state of a single thread of the target process at acquisition time: the thread identifier, scheduling state, an optional thread name, and a register file. One block is emitted per captured thread. These blocks let a consumer reconstruct the CPU state required to emulate or single-step execution forward from the captured memory image. Thread Context blocks are **OPTIONAL**; their presence is advertised by the `ThreadContexts` bit (bit 2) in `CapBitmap`. `ParentUUID` **MAY** reference the Process Identity block (`0x0040`) or be zero.
+
+Exactly one Thread Context block in a file **SHOULD** set the `Current` flag, identifying the thread whose register file — in particular its program counter — represents the natural resumption point for emulation. If no block sets `Current`, consumers **SHOULD** treat the first Thread Context block in file order as current.
+
+**Table 19a: Thread Context payload.**
+
+| Offset | Size | Field | Abbr | Description |
+|---|---|---|---|---|
+| `+0x00` | 8   | `ThreadID`    | TID  | OS thread identifier (TID). 0 if unknown. |
+| `+0x08` | 8   | `StartTime`   | StTm | Thread start time (UTC, ns since epoch). 0 if unknown. |
+| `+0x10` | 2   | `Flags`       | —    | Bit 0=`Current`, bit 1=`Crashed`. Bits 2–15 reserved. |
+| `+0x12` | 1   | `ThreadState` | TS   | `0x00`=Unknown, `0x01`=Running, `0x02`=Sleeping, `0x03`=Stopped, `0x04`=Waiting. |
+| `+0x13` | 1   | `Reserved`    | R    | Zero. |
+| `+0x14` | 4   | `RegCount`    | RCt  | Number of register entries that follow. |
+| `+0x18` | 2   | `NameLen`     | NL   | Thread name length (incl. null). 0 if N/A. |
+| `+0x1A` | 6   | `Reserved2`   | R    | Zero. |
+| `+0x20` | var | `ThreadName`  | —    | UTF-8, pad8. Omitted when `NameLen`=0. |
+| `+n`    | var | `Registers`   | —    | `RegCount` register entries (Table 19b). |
+
+Each register entry is self-describing and 8-byte aligned. The entry start (`+0x00` below) is relative to the start of that entry.
+
+**Table 19b: Thread Context register entry.**
+
+| Offset | Size | Field | Abbr | Description |
+|---|---|---|---|---|
+| `+0x00` | 1   | `NameLen` | NL | Register name length (incl. null). |
+| `+0x01` | 1   | `Width`   | W  | Value width in bytes (e.g. 8 for GPRs; 16/32/64 for vector registers). |
+| `+0x02` | 2   | `Flags`   | —  | Bit 0=program counter, bit 1=stack pointer, bit 2=frame pointer, bit 3=flags register. Bits 4–15 reserved. |
+| `+0x04` | 4   | `Reserved`| R  | Zero. |
+| `+0x08` | var | `Name`    | —  | UTF-8, pad8. Lowercase canonical register mnemonic. |
+| `+m`    | var | `Value`   | —  | `Width` bytes. Little-endian for integer registers; native byte order for vector registers. Pad to 8B. |
+
+Register names **MUST** be the lowercase canonical mnemonic for the target architecture (e.g. `rax`, `rip`, `rsp`, `rflags` on x86_64; `x0`–`x30`, `sp`, `pc`, `pstate` on ARM64). A producer that emits a Thread Context block **MUST** include at least the program-counter and stack-pointer registers, and **SHOULD** set the program-counter, stack-pointer, frame-pointer, and flags bits in `Flags` on the corresponding entries so that consumers can locate them without architecture-specific knowledge. Consumers **MUST** preserve registers whose names they do not recognize and skip each entry via its declared `NameLen`/`Width` extents.
+
+*Figure 11a: Thread Context (`0x0011`). Abbreviations per Tables 19a and 19b.*
 
 ---
 
@@ -954,6 +995,8 @@ A conformant acquirer **MUST** emit Process Identity as Block 0 and Module List 
 **Compression:** (28) when `Compressed` is set, write 8-byte `UncompressedSize` before compressed data; (29) set `BlockLength` to on-disk size.
 
 **Block types:** (30) **MUST NOT** emit block types whose payload format is not yet specified in this document.
+
+**Thread Context:** a producer that captures thread register state **SHOULD** emit one Thread Context block (`0x0011`) per thread, set the `Current` flag on exactly one of them, set `CapBitmap` bit 2, and include at least the program-counter and stack-pointer registers (Section 5.7).
 
 A producer **SHOULD** emit an EoC block. `FileHash` **SHOULD** be computed over plaintext even when encrypted. When encrypted, the producer **SHOULD** record an external file hash for chain-of-custody.
 

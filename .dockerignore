@@ -1,0 +1,4 @@
+# The image COPYs nothing (the repo is bind-mounted at run time), so send an
+# empty build context. Without this, .git/ and the committed PDF are uploaded
+# to the Docker daemon on every build.
+*

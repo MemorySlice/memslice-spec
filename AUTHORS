@@ -1,0 +1,23 @@
+# Memory Slice (.msl) Specification — Authors
+
+This file is the canonical record of authorship for the Memory Slice
+specification. The Git commit history is the authoritative, commit-level
+record; this file summarizes it in human-readable form.
+
+## Editor
+
+- Daniel Baier <daniel.baier@fkie.fraunhofer.de>
+
+## Contributors
+
+Contributions are welcome. Open a pull request at
+<https://github.com/MemorySlice/memslice-spec/> and your name will be added
+to this list, ordered by first contribution.
+
+---
+
+Copyright 2026 The Memory Slice Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this specification except in compliance with the License. A copy of the
+License is available in the LICENSE file at the repository root.

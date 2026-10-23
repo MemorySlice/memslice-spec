@@ -43,6 +43,10 @@
 \definecolor{btKeyHintB}{HTML}{ef6c00}
 \definecolor{btEoC}{HTML}{fce4ec}
 \definecolor{btEoCB}{HTML}{e94560}
+\definecolor{btEoX}{HTML}{ede7f6}
+\definecolor{btEoXB}{HTML}{5e35b1}
+\definecolor{btExt}{HTML}{f1f8e9}
+\definecolor{btExtB}{HTML}{7cb342}
 \definecolor{btSysCtx}{HTML}{b2dfdb}
 \definecolor{btSysCtxB}{HTML}{00897b}
 \definecolor{btSysTable}{HTML}{b2dfdb}
@@ -74,10 +78,11 @@
 % Preamble fields (block-level, before repeated entries)
 \definecolor{fldPreamble}{HTML}{b0bec5}
 \definecolor{fldPreambleB}{HTML}{546e7a}
-% Three-state pages
+% Four-state pages
 \definecolor{psCaptured}{HTML}{c8e6c9}
 \definecolor{psFailed}{HTML}{ffcc80}
 \definecolor{psUnmapped}{HTML}{e0e0e0}
+\definecolor{psNotResident}{HTML}{bbdefb}
 % Encryption layout
 \definecolor{encClear}{HTML}{e3f2fd}
 \definecolor{encClearB}{HTML}{1565c0}
@@ -91,7 +96,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small\color{muted}Memory Slice (.msl) Format Specification}
-\fancyhead[R]{\small\color{muted}Version 1.0.0}
+\fancyhead[R]{\small\color{muted}Version 1.1.0}
 \fancyfoot[C]{\small\color{muted}\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -116,6 +121,7 @@
 \newcommand{\padeight}{\ensuremath{\mathrm{pad8}}}
 \newcommand{\blake}{BLAKE3}
 \newcolumntype{M}{>{\ttfamily\small}l}
+\setlength{\emergencystretch}{2em}  % third-pass stretch for paragraphs dense with unbreakable field names
 \lstset{basicstyle=\ttfamily\small, backgroundcolor=\color{codebg}, frame=single, rulecolor=\color{muted!30}, breaklines=true}
 
 \newcommand{\blocklayout}[1]{%              
@@ -132,14 +138,14 @@
 {\LARGE\bfseries\color{accent} Binary Format Specification\par}\vspace{0.5cm}
 {\color{muted!50}\rule{\textwidth}{0.5pt}}\vspace{1cm}
 {\large\color{muted}
-Version: 1.0.0\\[4pt]
+Version: 1.1.0\\[4pt]
 Status: Working Draft\\[4pt]
 Editor(s): Daniel Baier\\[4pt]
-This version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/releases/tag/v1.0.0}}\\[4pt]
+This version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/releases/tag/v1.1.0}}\\[4pt]
 Latest version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/}}
 }\vspace{1.5cm}
 \begin{abstract}\noindent
-Memory Slice (\texttt{.msl}) is a self-describing, block-based binary format for capturing the forensic state of a single operating system process. It records both the virtual address space (with per-page acquisition status) and transient OS-queryable metadata that exists only while the process is alive. This document specifies the binary layout: file header, block architecture, integrity chain, capture-time payloads, cross-referencing, capability bitmap, raw dump import mechanism, investigation mode with system-wide context capture, and full-container AEAD encryption with post-quantum key encapsulation support.
+Memory Slice (\texttt{.msl}) is a self-describing, block-based binary format for capturing the forensic state of a single operating system process. It records both the virtual address space (with per-page acquisition status) and transient OS-queryable metadata that exists only while the process is alive. This document specifies the binary layout: file header, block architecture, integrity chain, capture-time payloads, extension segments for post-acquisition enrichment, cross-referencing, capability bitmap, raw dump import mechanism, investigation mode with system-wide context capture, and full-container AEAD encryption with post-quantum key encapsulation support.
 \end{abstract}
 
 \vfill
@@ -192,9 +198,12 @@ A thread-local fast PRNG such as \texttt{xoshiro256++} or \texttt{PCG64}, seeded
 \item[Consumer] Software that reads an MSL file.
 \item[Acquirer] A producer capturing live process state (types \hex{0000}--\hex{0FFF}).
 \item[Importer] A producer converting a raw dump into MSL (Section~\ref{sec:import}).
+\item[Enrichment tool] A producer that appends extension segments (Section~\ref{sec:extsegments}) to an existing file.
 \item[Block] Fixed header + variable payload.
 \item[Payload] Block-type-specific data after the header.
 \item[Preamble] Block-level fields at the start of a payload that precede repeated entry structures (e.g., \field{EntryCount}).
+\item[Capture segment] Block~0 through the End-of-Capture block: the evidence as written by the acquirer or importer (Section~\ref{sec:eoc}).
+\item[Extension segment] One or more blocks appended after the capture segment and terminated by an End-of-Extension block (Section~\ref{sec:extsegments}).
 \item[Investigation Mode] Acquisition for forensic investigations with system-wide context (Section~\ref{sec:investigation}).
 \item[Analysis Mode] Default mode for research and tool development. No system-wide context required.
 \end{description}
@@ -216,21 +225,21 @@ An MSL file is a linear byte stream: a \textbf{file header} followed by \textbf{
     lbl/.style={font=\scriptsize\ttfamily, color=muted},
 ]
 \node[block=2.4cm, fill=btFileHdr, draw=btFileHdr!70!black, text=white] (hdr) {\small\textbf{File Header}\\\scriptsize HeaderSize bytes\\\scriptsize\texttt{MEMSLICE}};
-\node[block=2.6cm, fill=btMemRegion, draw=btMemRegionB, right=0.4cm of hdr] (b0) {\small\textbf{Block 0}\\\scriptsize Hdr(80\,B) + Payload\\\tiny\texttt{PrevHash = B3(Hdr)}};
-\node[block=2.6cm, fill=btMemRegion, draw=btMemRegionB, right=0.3cm of b0] (b1) {\small\textbf{Block 1}\\\scriptsize Hdr(80\,B) + Payload\\\tiny\texttt{PrevHash = B3(Blk\,0)}};
+\node[block=2.6cm, fill=btMemRegion, draw=btMemRegionB, right=0.4cm of hdr] (b0) {\small\textbf{Block 0}\\\scriptsize Hdr(80\,B) + Payload\\\tiny\texttt{PrevHash = H(Hdr)}};
+\node[block=2.6cm, fill=btMemRegion, draw=btMemRegionB, right=0.3cm of b0] (b1) {\small\textbf{Block 1}\\\scriptsize Hdr(80\,B) + Payload\\\tiny\texttt{PrevHash = H(Blk\,0)}};
 \node[right=0.2cm of b1, font=\Large\bfseries, color=muted] (dots) {$\cdots$};
-\node[block=2.8cm, fill=btMemRegion, draw=btMemRegionB, right=0.2cm of dots] (bn) {\small\textbf{Block $N{-}1$}\\\scriptsize Hdr(80\,B) + Payload\\\tiny\texttt{PrevHash = B3(Blk\,N{-}2)}};
+\node[block=2.8cm, fill=btMemRegion, draw=btMemRegionB, right=0.2cm of dots] (bn) {\small\textbf{Block $N{-}1$}\\\scriptsize Hdr(80\,B) + Payload\\\tiny\texttt{PrevHash = H(Blk\,N{-}2)}};
 \draw[arr] (hdr)--(b0); \draw[arr] (b0)--(b1); \draw[arr] (b1)--(dots); \draw[arr] (dots)--(bn);
 \node[lbl, below=3pt of hdr.south west, anchor=north west] {0x00};
 \node[lbl, below=3pt of hdr.south east, anchor=north west] {\, HeaderSize};
 \node[lbl, below=3pt of bn.south east, anchor=north east] {EOF};
-\draw[thick, dashed, color=accent, -{Stealth[length=4pt]}] (b0.south)--++(0,-0.5)-| node[pos=0.25, below, font=\scriptsize\color{accent}] {\blake{} chain anchored to file header} (hdr.south);
+\draw[thick, dashed, color=accent, -{Stealth[length=4pt]}] (b0.south)--++(0,-0.5)-| node[pos=0.25, below, font=\scriptsize\color{accent}] {hash chain ($H$ = \field{HashAlgo}) anchored to file header} (hdr.south);
 \end{tikzpicture}
-\caption{MSL file structure: file header followed by \blake{}-chained blocks.}
+\caption{MSL file structure: file header followed by a hash-chained capture segment (terminated by the End-of-Capture block) and optional extension segments (Section~\ref{sec:extsegments}).}
 \label{fig:format-overview}
 \end{figure}
 
-Block~0's \field{PrevHash} = $\blake(\text{File Header})$. Each subsequent block hashes its predecessor. Consumers detect end-of-file when fewer than 80 bytes remain or the next 4 bytes do not match the block magic (\hex{4D534C43}). If \field{BlockCount} in the file header is non-zero, consumers \SHOULD{} additionally verify that the parsed block count matches the declared value.
+Block~0's \field{PrevHash} = $H(\text{File Header})$, where $H$ is the hash selected by \field{HashAlgo} (\blake{} by default; Section~\ref{sec:hashchain}). Each subsequent block hashes its predecessor. The capture segment ends with the End-of-Capture block (Section~\ref{sec:eoc}) and \MAY{} be followed by extension segments (Section~\ref{sec:extsegments}). Consumers detect end-of-file when fewer than 80 bytes remain or the next 4 bytes do not match the block magic (\hex{4D534C43}). Every non-zero block count---in the file header or in the EoC block---\MUST{} equal the number of capture-segment blocks actually parsed (Section~\ref{sec:basehdr}, \emph{BlockCount semantics}).
 
 \subsection{Acquisition Modes}\label{sec:modes}
 The file header's \field{Flags} field (offset~\hex{0C}) determines the acquisition mode and whether encryption is active:
@@ -264,10 +273,10 @@ The file header's \field{Flags} field (offset~\hex{0C}) determines the acquisiti
 \draw[arr] (hdr)--(b0); \draw[arr] (b0)--(b1); \draw[arr] (b1)--(b2); \draw[arr] (b2)--(dots); \draw[arr] (dots)--(bm); \draw[arr] (bm)--(bk); \draw[arr] (bk)--(eoc);
 \node[lbl, below=0.7cm of b0.south] {Block 0}; \node[lbl, below=0.7cm of b1.south] {Block 1}; \node[lbl, below=0.7cm of b2.south] {Block 2+}; \node[lbl, below=0.7cm of eoc.south] {last};
 \draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (b0.south) to[out=-90, in=-90, looseness=0.7] (hdr.south);
-\node[font=\scriptsize\color{accent}] at ($(hdr.south)!0.5!(b0.south)+(0,-0.6)$) {\blake{} PrevHash};
+\node[font=\scriptsize\color{accent}] at ($(hdr.south)!0.5!(b0.south)+(0,-0.6)$) {PrevHash ($H$)};
 \draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (b1.south) to[out=-90, in=-90, looseness=0.7] (b0.south);
 \end{tikzpicture}
-\caption{Analysis mode (\field{Investigation}=0, \field{Encrypted}=0).}
+\caption{Analysis mode (\field{Investigation}=0, \field{Encrypted}=0). Thread Context blocks (\hex{0011}), when present, precede the first Memory Region (Section~\ref{sec:threadctx}).}
 \label{fig:acq-sequence}
 \end{figure}
 
@@ -298,23 +307,24 @@ The file header's \field{Flags} field (offset~\hex{0C}) determines the acquisiti
 
 \subsection{Design Principles}
 \begin{enumerate}[leftmargin=1.8em, itemsep=2pt]
-\item \textbf{Integrity Verification.} Append-only policy with \blake{} hash chain.
-\item \textbf{Epistemic Honesty.} Three-state pages: Captured vs.\ Failed vs.\ Unmapped.
+\item \textbf{Integrity Verification.} Append-only policy with a hash chain (\blake{} by default).
+\item \textbf{Epistemic Honesty.} Four-state pages: Captured vs.\ Failed vs.\ Unmapped vs.\ NotResident.
 \item \textbf{Self-Describing.} Version, header size, OS, arch, PID, capabilities.
 \item \textbf{Dual-Layer OS Abstraction.} Normalized fields + OS-native opaque blob.
 \item \textbf{Dual Acquisition Modes.} Analysis mode for research; Investigation mode for forensic investigations.
 \item \textbf{Confidentiality.} Full-container AEAD encryption with post-quantum key encapsulation.
 \end{enumerate}
 
-Capture-time blocks are optimized for streaming, append-only acquisition. The Structural namespace (\hex{1000}--\hex{1FFF}) is reserved for analysis tools to add post-acquisition indexes---including seek tables and virtual address maps---that enable efficient random access without modifying the capture-time block stream.
+Capture-time blocks are optimized for streaming, append-only acquisition. The Structural namespace (\hex{1000}--\hex{1FFF}) holds derived views of the capture---virtual address maps, seek tables, pointer graphs---that enable efficient random access. Such blocks are written either at capture time (before the End-of-Capture block) or afterwards in extension segments (Section~\ref{sec:extsegments}), which leave the capture segment byte-for-byte untouched.
 
 \subsection{Scope of the Integrity Guarantee}\label{sec:integrityscope}
 The hash chain provides \emph{tamper detection}, not \emph{tamper resistance}. It protects against \textbf{accidental corruption} and detects \textbf{naive modification}, including block reordering, insertion, and deletion---threats that a per-block checksum alone cannot detect, since the chain cryptographically binds each block to its predecessor and ultimately to the file header. For tamper evidence admissible in legal contexts, producers \SHOULD{} complement the hash chain with external mechanisms (digital signature over \field{FileHash}, RFC~3161 timestamp, write-once media). When encryption is active, the AEAD tag provides stronger integrity. The hash chain alone \MUSTNOT{} be represented as providing forensic-grade tamper evidence.
 
 \begin{table}[H]\centering\caption{Integrity mechanisms: guarantees and limitations.}\label{tab:threatmodel}\small
-\begin{tabular}{l p{3.5cm} p{4cm} l}\toprule\textbf{Mechanism}&\textbf{Protects Against}&\textbf{Limitations}&\textbf{Key?}\\\midrule
-\blake{} chain & Accidental corruption, naive modification & Attacker can recompute chain after modification & No \\
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.6cm} p{3.4cm} p{4.6cm} l}\toprule\textbf{Mechanism}&\textbf{Protects Against}&\textbf{Limitations}&\textbf{Key?}\\\midrule
+\field{PrevHash} chain & Accidental corruption, naive modification & Attacker can recompute chain after modification & No \\
 EoC \field{FileHash} & Truncation, missing blocks & Recomputable by attacker; only verifiable after decryption if encrypted & No \\
+Extension \field{SegmentHash} + \field{BlockCount} & Truncated or unterminated extension segments & Recomputable by attacker; covers only the segment itself & No \\
 AEAD tag & Any tampering of encrypted block stream & Header remains cleartext (metadata leakage); requires key compromise to forge & Yes \\
 External hash & Complete file substitution, transport corruption & Only as trustworthy as the storage of the hash itself & No \\
 \bottomrule\end{tabular}\end{table}
@@ -340,7 +350,7 @@ External hash & Complete file substitution, transport corruption & Only as trust
 0x32 & 2  & \field{ArchType}   & Ar & Target CPU (Table~\ref{tab:platformcodes}b). \\
 0x34 & 4  & \field{PID}        & --- & Process ID at acquisition. \\
 0x38 & 1  & \field{ClockSource} & CS & \hex{00}=Unknown, \hex{01}=\texttt{CLOCK\_REALTIME}, \hex{02}=\texttt{CLOCK\_MONOTONIC\_RAW}, \hex{03}=\texttt{QPC}, \hex{04}=\texttt{mach\_absolute\_time}. \hex{FF}=Other. \\
-0x39 & 4  & \field{BlockCount} & BCt & Total number of blocks (incl.\ EoC). \hex{00000000}~=~unknown (streaming). Consumers \SHOULD{} verify if non-zero. \\
+0x39 & 4  & \field{BlockCount} & BCt & Number of blocks in the capture segment (incl.\ EoC). \hex{00000000}~=~unknown. Never patched after writing; see \emph{BlockCount semantics} below and Section~\ref{sec:eoc}. \\
 0x3D & 1  & \field{HashAlgo}   & HA & Integrity hash algorithm selector (Table~\ref{tab:hashalgos}). \hex{00}=BLAKE3 (default). \\
 0x3E & 2  & \field{Reserved}   & Rsv & \MUST{} be zero. \\
 \bottomrule\end{tabular}\end{table}
@@ -348,7 +358,7 @@ External hash & Complete file substitution, transport corruption & Only as trust
 \noindent\textbf{Size:} $8{+}1{+}1{+}2{+}4{+}8{+}16{+}8{+}2{+}2{+}4{+}1{+}4{+}1{+}2=64$.
 
 \begin{notebox}[title={BlockCount semantics}]
-A producer that writes blocks in streaming fashion (i.e., the total count is unknown at file creation time) \MUST{} write \hex{00000000}. Such a producer \MAY{} seek back after writing the EoC block and patch \field{BlockCount} to the actual value. When \field{BlockCount} is non-zero and the number of successfully parsed blocks differs, the file \SHOULD{} be considered truncated or corrupt.
+\field{BlockCount} counts the blocks of the capture segment, including the End-of-Capture block; blocks in extension segments (Section~\ref{sec:extsegments}) are never counted. A producer that does not know the count when it writes the header (streaming acquisition) \MUST{} write \hex{00000000} and \MUSTNOT{} patch the field afterwards: the header is covered by Block~0's \field{PrevHash} and by the EoC \field{FileHash}, so a later modification would invalidate both. Such a producer \SHOULD{} record the exact count in the EoC block's \field{BlockCount} field instead (Table~\ref{tab:eoc}). Encrypted containers \MAY{} leave the header field zero and rely on the (encrypted) EoC count. Every non-zero count---header or EoC---\MUST{} equal the number of capture-segment blocks actually parsed, including the EoC block; otherwise the file \MUST{} be considered truncated or corrupt (consumer rule~13, Section~\ref{sec:conformance}).
 \end{notebox}
 
 \begin{table}[H]\centering\caption{File header flags (\field{Flags}, 32~bits at offset~\hex{0C}).}\label{tab:hdrflags}\small
@@ -424,8 +434,8 @@ When \field{Encrypted} is set, \field{HeaderSize} \MUST{} be~128. Bytes \hex{00}
 \subsection{Byte Order}
 All multi-byte structural integers are little-endian (\field{Endianness}=\hex{01}). Memory content within \field{PageData} is stored in the target architecture's native order. See Section~\ref{sec:byteorder} for the complete byte-order domain summary.
 
-\subsection{Version Compatibility}
-Unknown major version: \SHOULD{} reject. Unknown minor of known major: \MAY{} parse. Always use \field{HeaderSize} to locate Block~0.
+\subsection{Version Compatibility}\label{sec:versioncompat}
+Unknown major version: \SHOULD{} reject. Unknown minor of a known major: \MUST{} parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via \field{BlockLength}, reserved fields ignored). Files that use any feature introduced in version~1.1 (extension segments, EoC \field{BlockCount}, \field{HashAlgo}, Thread Context, VAS Map \field{NameSource}, blocks \hex{0054} and \hex{0059}--\hex{005B}, page state NotResident) \SHOULD{} set \field{Version} to \hex{0101}; files written as \hex{0100} remain valid. Always use \field{HeaderSize} to locate Block~0.
 
 \begin{table}[H]\centering\caption{Target platform codes: (a) OS and (b) CPU.}\label{tab:platformcodes}\small
 \begin{minipage}[t]{0.47\textwidth}\centering
@@ -455,7 +465,7 @@ Unknown major version: \SHOULD{} reject. Unknown minor of known major: \MAY{} pa
 Every block consists of a \textbf{fixed 80-byte Common Block Header} followed by a \textbf{variable-length payload}. \field{BlockLength} specifies the total \textbf{on-disk} size of the block (header + payload, in compressed form if applicable). Consumers \MUST{} verify $\field{BlockLength} \geq 80$ and \MUST{} reject blocks that violate this constraint. Unknown types are skipped via \field{BlockLength}.
 
 \subsection{Common Block Header (80 bytes)}\label{sec:blockheader}
-Every block begins with the same 80-byte header, which provides type identification, length framing, UUID-based identity and parentage, and the \blake{} integrity chain anchor. The fixed header size ensures that consumers can always parse block boundaries without understanding payload formats. Table~\ref{tab:blockheader} defines the fields; Figure~\ref{fig:block-header} shows the layout.
+Every block begins with the same 80-byte header, which provides type identification, length framing, UUID-based identity and parentage, and the integrity chain anchor. The fixed header size ensures that consumers can always parse block boundaries without understanding payload formats. Table~\ref{tab:blockheader} defines the fields; Figure~\ref{fig:block-header} shows the layout.
 
 \begin{table}[H]\centering\caption{Block header (80 bytes). All fields $\geq$\,8\,B are 8-byte aligned.}\label{tab:blockheader}\small
 \begin{tabular}{M M l l p{4.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
@@ -467,7 +477,7 @@ Every block begins with the same 80-byte header, which provides type identificat
 0x0E & 2  & \field{Reserved} & R & Zero. \\
 0x10 & 16 & \field{BlockUUID} & BlkUUID & UUIDv4. 8-byte aligned. \\
 0x20 & 16 & \field{ParentUUID} & ParUUID & Parent or zeros. 8-byte aligned. \\
-0x30 & 32 & \field{PrevHash} & --- & \blake{} of preceding element. Zeros when encrypted. 8-byte aligned. \\
+0x30 & 32 & \field{PrevHash} & --- & $H$ (\field{HashAlgo}) of preceding element. Zeros when encrypted. 8-byte aligned. \\
 0x50 & var& \field{Payload} & --- & $\field{BlockLength}-80$ bytes. \\
 \bottomrule\end{tabular}\end{table}
 
@@ -513,13 +523,13 @@ When the \field{Compressed} flag is set, only the payload portion (bytes after t
 +0x08 & var & \field{CompressedData} & Compressed byte stream (zstd or lz4). \\\bottomrule
 \end{tabular}\end{table}
 
-\noindent\field{BlockLength} reflects the total on-disk size: $80 + 8 + \text{len}(\field{CompressedData})$. After decompression, the resulting \field{UncompressedSize} bytes are parsed according to the block type's payload definition. The block header (including \field{BlockType}, \field{Flags}, and \field{BlockLength}) is never compressed. The \blake{} hash chain covers the on-disk (compressed) bytes.
+\noindent\field{BlockLength} reflects the total on-disk size: $80 + 8 + \text{len}(\field{CompressedData})$. After decompression, the resulting \field{UncompressedSize} bytes are parsed according to the block type's payload definition. The block header (including \field{BlockType}, \field{Flags}, and \field{BlockLength}) is never compressed. The hash chain covers the on-disk (compressed) bytes.
 
 \subsection{Block Type Registry}\label{sec:typeregs}
 \begin{table}[H]\centering\caption{Block type namespaces.}\label{tab:typeranges}\small
-\begin{tabular}{l l l p{4.5cm}}\toprule\textbf{Range}&\textbf{Namespace}&\textbf{Writer}&\textbf{Examples}\\\midrule
-\hex{0000}--\hex{0FFF} & Capture-Time & Acquirer/Importer & Regions, modules, keys, system context \\
-\hex{1000}--\hex{1FFF} & Structural & Analysis tool & VAS map, pointer graph \\
+\begin{tabular}{l l p{5.2cm} p{3.2cm}}\toprule\textbf{Range}&\textbf{Namespace}&\textbf{Writer}&\textbf{Examples}\\\midrule
+\hex{0000}--\hex{0FFF} & Capture-Time & Acquirer/Importer in the capture segment; enrichment tools for the types Section~\ref{sec:extsegments} permits in extension segments & Regions, modules, keys, system context \\
+\hex{1000}--\hex{1FFF} & Structural & Acquirer, importer, or analysis tool; capture segment or extension segment & VAS map, pointer graph \\
 \hex{2000}--\hex{FFFF} & Reserved & --- & Future versions \\\bottomrule
 \end{tabular}\end{table}
 
@@ -529,7 +539,7 @@ When the \field{Compressed} flag is set, only the payload portion (bytes after t
 0x0001 & Memory Region & Per-page memory (Sec.~\ref{sec:memregion}). \\
 0x0002 & Module Entry & Module metadata (Sec.~\ref{sec:modentry}). \\
 0x0010 & Module List Index & Module manifest (Sec.~\ref{sec:modlist}). \MUST{} be Block~1. \\
-0x0011 & Thread Context & Register state. \\
+0x0011 & Thread Context & Register state (Sec.~\ref{sec:threadctx}). \\
 0x0012 & File Descriptor & Open handle. \\
 0x0013 & Network Connection & Socket attribution. \\
 0x0014 & Environment Block & Env vars. \\
@@ -542,20 +552,25 @@ When the \field{Compressed} flag is set, only the payload portion (bytes after t
 0x0051 & Process Table & System-wide process list (Sec.~\ref{sec:proctable}). \\
 0x0052 & Connection Table & System-wide sockets (Sec.~\ref{sec:conntable}). \\
 0x0053 & Handle Table & System-wide handles (Sec.~\ref{sec:handletable}). \\
+0x0054 & Connectivity Table & Kernel network state without socket endpoints (Sec.~\ref{sec:block:connectivity-table}). \\
+0x0059 & Physical Memory Map & Physical address ranges of the host (Sec.~\ref{sec:physmap}). \\
+0x005A & Module Build-ID Manifest & Build IDs and disk hashes merged into the module list (Sec.~\ref{sec:buildid}). \\
+0x005B & Region Omission Manifest & Regions deliberately skipped by the acquirer (Sec.~\ref{sec:omission}). \\
+0x0FFE & End-of-Extension & Extension segment terminator (Sec.~\ref{sec:extsegments}). \\
 0x0FFF & End-of-Capture & Completeness marker (Sec.~\ref{sec:eoc}). \\\midrule
-0x1001 & VAS Map & Reconstructed virtual address space. \\
-0x1003 & Pointer Graph & Pointer relationships. \\\bottomrule
+0x1001 & VAS Map & Enumerated virtual address space (Sec.~\ref{sec:vasmap}). \\
+0x1003 & Pointer Graph & Pointer relationships. Producer-defined payload; extension segments only (Sec.~\ref{sec:extsegments}). \\\bottomrule
 \end{tabular}\end{table}
 
-\noindent Block types listed without a section reference (e.g., \hex{0011}--\hex{0015}, \hex{1001}, \hex{1003}) are reserved type codes whose payload formats will be defined in future versions of this specification. Producers \MUSTNOT{} emit these types until their payloads are specified. Consumers \MUST{} skip them via \field{BlockLength}.
+\noindent Block types listed without a section reference (\hex{0012}--\hex{0015}) are reserved evidence types whose payload formats will be defined in future versions of this specification. Producers \MUSTNOT{} emit them anywhere until their payloads are specified; they are also excluded from extension segments. Block types whose payload this document does not specify but which are not evidence---the Pointer Graph (\hex{1003}) and other producer-defined Structural types---\MAY{} be emitted only in extension segments (Section~\ref{sec:extsegments}), where a consumer that does not recognize the payload skips the block. Consumers \MUST{} skip unknown types via \field{BlockLength}.
 
 \subsection{Integrity Chain (\field{PrevHash})}\label{sec:hashchain}
-The integrity hash algorithm is selected by the \field{HashAlgo} field in the file header (Table~\ref{tab:fileheader}). All integrity fields within a single file---\field{PrevHash}, EoC \field{FileHash}, and Module Entry \field{DiskHash}---\MUST{} use the same algorithm; producers \MUSTNOT{} mix algorithms within a file. All registered algorithms produce a 32-byte output, so field layouts are independent of the selection.
+The integrity hash algorithm is selected by the \field{HashAlgo} field in the file header (Table~\ref{tab:fileheader}). All integrity fields within a single file---\field{PrevHash}, EoC \field{FileHash}, End-of-Extension \field{SegmentHash}, and Module Entry \field{DiskHash}---\MUST{} use the same algorithm; producers \MUSTNOT{} mix algorithms within a file. All registered algorithms produce a 32-byte output, so field layouts are independent of the selection.
 
 Let $H(\cdot)$ denote the selected algorithm. Then:
 \begin{itemize}[leftmargin=1.5em, itemsep=2pt]
 \item \textbf{Block 0:} $\field{PrevHash} = H(\text{File Header, all \field{HeaderSize} bytes})$.
-\item \textbf{Block $i$ ($i\geq 1$):} $\field{PrevHash} = H(\text{Block}_{i-1})$.
+\item \textbf{Block $i$ ($i\geq 1$):} $\field{PrevHash} = H(\text{Block}_{i-1})$. The chain continues across the End-of-Capture block into extension segments (Section~\ref{sec:extsegments}).
 \end{itemize}
 
 \begin{table}[H]\centering\caption{Integrity hash algorithm codes (\field{HashAlgo}).}\label{tab:hashalgos}\small
@@ -569,24 +584,95 @@ Let $H(\cdot)$ denote the selected algorithm. Then:
 
 \noindent\textbf{Default and rationale.} \field{HashAlgo}=\hex{00} (BLAKE3) is \textbf{RECOMMENDED} for general use and is the default for all implementations. Producers \SHOULD{} select \hex{01} (SHA-256) or \hex{02} (SHA-512/256) only when FIPS~140 compliance, ecosystem interoperability, or organizational policy requires a NIST-standardized hash; or when platform measurements indicate a NIST hash outperforms BLAKE3---for example, aarch64 systems with the ARMv8 Cryptographic Extension, where SHA-256 hardware acceleration can outperform software BLAKE3.
 
-\noindent\textbf{Scope of selection.} The \field{HashAlgo} selection applies only to integrity hashing: \field{PrevHash}, \field{FileHash}, and \field{DiskHash}. The key derivation function defined in Section~\ref{sec:kem} always uses HKDF-BLAKE3 regardless of \field{HashAlgo}; integrity hashing and key derivation are independent design choices and are not configured together.
+\noindent\textbf{Scope of selection.} The \field{HashAlgo} selection applies only to integrity hashing: \field{PrevHash}, \field{FileHash}, \field{SegmentHash}, and \field{DiskHash}. The key derivation function defined in Section~\ref{sec:kem} always uses HKDF-BLAKE3 regardless of \field{HashAlgo}; integrity hashing and key derivation are independent design choices and are not configured together.
 
-\noindent\textbf{Interpretation of references.} Where this specification refers to ``\blake{}'' in integrity contexts---\field{PrevHash} (this section), \field{FileHash} (Section~\ref{sec:eoc}), and \field{DiskHash} (Section~\ref{sec:modentry})---the reference denotes the algorithm selected by \field{HashAlgo}. References to HKDF-\blake{} (Section~\ref{sec:kem}) are not subject to \field{HashAlgo} and always denote BLAKE3.
+\noindent\textbf{Interpretation of references.} Where this specification refers to ``\blake{}'' in integrity contexts---\field{PrevHash} (this section), \field{FileHash} (Section~\ref{sec:eoc}), \field{SegmentHash} (Section~\ref{sec:extsegments}), and \field{DiskHash} (Section~\ref{sec:modentry})---the reference denotes the algorithm selected by \field{HashAlgo}. References to HKDF-\blake{} (Section~\ref{sec:kem}) are not subject to \field{HashAlgo} and always denote BLAKE3.
 
 \noindent\textbf{Scope of hashing.} Hashes cover raw on-disk bytes (compressed form if applicable). When \field{Encrypted} is set, all \field{PrevHash} fields \MUST{} be zero (Section~\ref{sec:enc-integrity}).
 
 
 \subsection{End-of-Capture Block (\hex{0FFF})}\label{sec:eoc}
-Completeness marker. An acquirer \SHOULD{} emit it as the final capture-time block. Consumers \MUST{} treat any bytes following a verified EoC block as non-MSL trailing data.
-\begin{table}[H]\centering\caption{End-of-Capture payload.}\label{tab:eoc}\small
-\begin{tabular}{M M l p{6cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Description}\\\midrule
-+0x00 & 32 & \field{FileHash} & \blake{} of all bytes from offset~0 through the last byte before this EoC block. Populated even when encrypted (computed over plaintext). \\
+Completeness marker. An acquirer \SHOULD{} emit it as the final block of the capture segment. A verified EoC block \MAY{} be followed by extension segments (Section~\ref{sec:extsegments}); bytes after the last verified segment are non-MSL trailing data.
+\begin{table}[H]\centering\caption{End-of-Capture payload (48 bytes).}\label{tab:eoc}\small
+\begin{tabular}{M M l p{6.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Description}\\\midrule
++0x00 & 32 & \field{FileHash} & $H$ (\field{HashAlgo}) of all bytes from offset~0 through the last byte before this EoC block. Populated even when encrypted (computed over plaintext). \\
 +0x20 & 8 & \field{AcqEnd} & Acquisition end time (UTC, ns since epoch). \\
-+0x28 & 8 & \field{Reserved} & Zero. \\\bottomrule
++0x28 & 4 & \field{BlockCount} & Number of capture-segment blocks including this EoC block. 0~=~unknown. A producer \SHOULD{} record the exact count here; it is always known when the EoC block is written (Section~\ref{sec:basehdr}, \emph{BlockCount semantics}). \\
++0x2C & 4 & \field{Reserved} & Zero. \\\bottomrule
 \end{tabular}\end{table}
 
+\noindent Version~1.0.0 defined bytes \texttt{+0x28}--\texttt{+0x2F} as reserved (zero), which reads as $\field{BlockCount}=0$; some 1.0.0 producers wrote a 40-byte payload without them. Consumers \MUST{} accept a 40-byte EoC payload and treat its count as unknown.
+
+\subsection{Extension Segments and End-of-Extension Block (\hex{0FFE})}\label{sec:extsegments}
+An MSL file consists of the file header, exactly one \textbf{capture segment}, and zero or more \textbf{extension segments}, in this order (Figure~\ref{fig:ext-layout}). The capture segment is the evidence: everything from Block~0 through the End-of-Capture block, exactly as the acquirer or importer wrote it. An extension segment is a run of one or more blocks terminated by an End-of-Extension block (\hex{0FFE}). Extension segments let producers other than the acquirer---enrichment tools, analysis frameworks, importers preserving third-party annotations---add blocks after the capture has completed, without rewriting or re-hashing the capture segment and without patching the header. Each segment is self-delimiting and self-verifying, so a file remains usable if an appending tool is interrupted.
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[blk/.style={draw, rounded corners=2pt, minimum height=1.0cm, text width=1.3cm, align=center, inner sep=2pt, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted},arr/.style={-{Stealth[length=4pt]}, thick, color=muted},seglbl/.style={font=\tiny\bfseries}]
+\node[blk, fill=btFileHdr, draw=btFileHdr!70!black, text=white] (hdr) at (0,0) {\textbf{File Header}\\64/128\,B};
+\node[blk, fill=btMemRegion, draw=btMemRegionB, right=0.2cm of hdr] (b0) {\textbf{Block 0}};
+\node[right=0.05cm of b0, font=\normalsize\bfseries, color=muted] (d1) {$\cdots$};
+\node[blk, fill=btEoC, draw=btEoCB, right=0.05cm of d1] (eoc) {\textbf{EoC}\\\hex{0FFF}};
+\node[blk, fill=btExt, draw=btExtB, right=0.3cm of eoc] (e1) {\textbf{Block}};
+\node[right=0.05cm of e1, font=\normalsize\bfseries, color=muted] (d2) {$\cdots$};
+\node[blk, fill=btEoX, draw=btEoXB, right=0.05cm of d2] (eox1) {\textbf{EoX}\\\hex{0FFE}};
+\node[right=0.1cm of eox1, font=\normalsize\bfseries, color=muted] (d3) {$\cdots$};
+\node[blk, fill=btExt, draw=btExtB, right=0.1cm of d3] (en) {\textbf{Block}};
+\node[right=0.05cm of en, font=\normalsize\bfseries, color=muted] (d4) {$\cdots$};
+\node[blk, fill=btEoX, draw=btEoXB, right=0.05cm of d4] (eoxn) {\textbf{EoX}\\\hex{0FFE}};
+\node[blk, text width=0.7cm, fill=encTag, draw=encTagB, right=0.3cm of eoxn] (tag) {\textbf{Tag}\\16\,B};
+\node[blk, fill=white, draw=muted, dashed, right=0.2cm of tag] (trail) {\textbf{trailing}\\data};
+\draw[arr] (hdr)--(b0); \draw[arr] (b0)--(d1); \draw[arr] (d1)--(eoc); \draw[arr] (eoc)--(e1); \draw[arr] (e1)--(d2); \draw[arr] (d2)--(eox1); \draw[arr] (eox1)--(d3); \draw[arr] (d3)--(en); \draw[arr] (en)--(d4); \draw[arr] (d4)--(eoxn);
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=4pt}, thick, color=btEoCB] (b0.south west)--(eoc.south east) node[midway, below=9pt, seglbl, color=btEoCB] {capture segment (counted by \field{BlockCount})};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=4pt}, thick, color=btEoXB] (e1.south west)--(eox1.south east) node[midway, below=9pt, seglbl, color=btEoXB] {extension segment 1};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=4pt}, thick, color=btEoXB] (en.south west)--(eoxn.south east) node[midway, below=9pt, seglbl, color=btEoXB] {extension segment $n$};
+\node[seglbl, color=encTagB, below=9pt of tag.south, text width=1.6cm, align=center] {AEAD tag (encrypted only)};
+\draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (e1.north) to[out=90, in=90, looseness=0.8] (eoc.north);
+\node[font=\tiny\color{accent}] at ($(eoc.north)!0.5!(e1.north)+(0,0.75)$) {PrevHash = $H$(EoC)};
+\draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (en.north) to[out=90, in=90, looseness=0.8] (eox1.north);
+\node[font=\tiny\color{accent}] at ($(eox1.north)!0.5!(en.north)+(0,0.75)$) {PrevHash = $H$(EoX)};
+\draw[decorate, decoration={brace, amplitude=3pt, raise=3pt}, thick, color=btEoXB] (e1.north west)--(d2.east|-e1.north) node[midway, above=6pt, font=\tiny\color{btEoXB}] {SegmentHash};
+\end{tikzpicture}}
+\caption{File layout with extension segments. Each segment is a run of blocks closed by an End-of-Extension (EoX) block whose \field{SegmentHash} covers the segment's preceding bytes; the \field{PrevHash} chain runs unbroken from the file header through every segment. In encrypted containers the AEAD tag follows the last segment (Section~\ref{sec:enclayout}).}
+\label{fig:ext-layout}
+\end{figure}
+
+\noindent\textbf{Chain continuity.} The integrity chain continues across the End-of-Capture block: the \field{PrevHash} of the first block of the first extension segment is $H$ of the EoC block's bytes, and the chain remains linear across segment boundaries (the first block of segment $k{+}1$ hashes the End-of-Extension block of segment $k$). When \field{Encrypted} is set, all \field{PrevHash} fields in extension segments \MUST{} be zero, as in the capture segment.
+
+\begin{table}[H]\centering\caption{End-of-Extension payload.}\label{tab:eox}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
++0x00 & 32 & \field{SegmentHash} & SegH & $H$ (\field{HashAlgo}) of all bytes from the start of this segment's first block through the last byte before this End-of-Extension block. \\
++0x20 & 8 & \field{WrittenAt} & WrAt & Time the segment was written (UTC, ns since epoch). 0 if unknown. \\
++0x28 & 4 & \field{BlockCount} & BCt & Number of blocks in this segment, including this End-of-Extension block. \MUST{} be exact (never~0). \\
++0x2C & 4 & \field{Reserved} & R & Zero. \\
++0x30 & 2 & \field{ProducerLen} & PL & Length of \field{Producer} incl.\ NUL. 0~=~none. \\
++0x32 & 6 & \field{Reserved2} & R & Zero. \\
++0x38 & var & \field{Producer} & --- & UTF-8, pad8. Name and version of the appending tool (e.g., \texttt{memslicer-enrich/0.5.0}). Omitted when \field{ProducerLen}=0. \\\bottomrule
+\end{tabular}\end{table}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x0FFE}};
+\node[fld, text width=1.6cm, fill=fldCrypto, draw=fldCryptoB, right=0pt of hdr] (sh) {\textbf{SegH}\\32\,B};
+\node[fld, text width=1.0cm, fill=fldData, draw=fldDataB, right=0pt of sh] (wa) {\textbf{WrAt}\\8};
+\node[fld, text width=0.6cm, fill=fldData, draw=fldDataB, right=0pt of wa] (bc) {\textbf{BCt}\\4};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of bc] (r1) {\textbf{R}\\4};
+\node[fld, text width=0.5cm, fill=fldData, draw=fldDataB, right=0pt of r1] (pl) {\textbf{PL}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of pl] (r2) {\textbf{R}\\6};
+\node[fld, text width=1.6cm, fill=fldVar, draw=fldVarB, right=0pt of r2] (prod) {\textbf{Producer}\\var};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of sh.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=navy] (sh.south west)--(r2.south east) node[midway, below=18pt, font=\tiny\color{navy}] {Fixed (56\,B)};
+\end{tikzpicture}
+\caption{End-of-Extension (\hex{0FFE}). Abbreviations per Table~\ref{tab:eox}.}\label{fig:eox-payload}\end{figure}
+
+\noindent\textbf{Permitted block types.} Extension segments carry derived or supplementary data, never evidence. The following types \MUSTNOT{} appear in an extension segment: Memory Region (\hex{0001}), Module Entry (\hex{0002}), \hex{0010}--\hex{0015}, Import Provenance (\hex{0030}), Process Identity (\hex{0040}), \hex{0050}--\hex{0058}, and End-of-Capture (\hex{0FFF}). Permitted types are Key Hint (\hex{0020}), Related Dump (\hex{0041}), \hex{0059}--\hex{005B} (Sections~\ref{sec:physmap}--\ref{sec:omission}), and the Structural namespace (\hex{1000}--\hex{1FFF}). Block types whose payload this specification does not define (e.g., Pointer Graph \hex{1003}, producer-defined Structural types) \MAY{} appear only in extension segments. Blocks in an extension segment \MAY{} reference blocks in the capture segment or in earlier segments by \field{ParentUUID} or payload-embedded UUID (Section~\ref{sec:crossref}).
+
+\noindent\textbf{Producer rules.} A producer appending an extension segment \MUSTNOT{} modify any byte of the header, the capture segment, or an existing segment; \MUST{} terminate every segment it writes with an End-of-Extension block; \MUST{} continue the \field{PrevHash} chain from the last block already in the file (zero when encrypted); and \MUST{} write the exact \field{BlockCount} and \field{SegmentHash}. A producer that finds trailing data after the last verified segment \SHOULD{} refuse to append rather than build on unverified bytes. In an encrypted container, extension segments \MUST{} lie inside the AEAD ciphertext, i.e., be written before the AEAD is finalized; nothing can be appended to a sealed container because the tag at EOF authenticates the whole stream (Section~\ref{sec:enclayout}).
+
+\noindent\textbf{Consumer rules.} After parsing and verifying the EoC block (and, when encrypted, the AEAD tag), a consumer \MUST{} attempt to parse extension segments: read blocks until an End-of-Extension block, then verify (a)~chain continuity from the preceding block (unencrypted files), (b)~\field{SegmentHash}, and (c)~\field{BlockCount}. Only a segment that passes all three checks is a \emph{verified segment}; its blocks \MAY{} then be presented alongside the capture. A segment that fails verification or is not terminated---EOF, non-magic bytes, or a block that fails framing before an End-of-Extension block is found---\MUSTNOT{} be presented as verified, and everything from its first byte to EOF is trailing data. Consumers that do not implement extension segments \MUST{} treat everything after the EoC block as trailing data (consumer rule~14, Section~\ref{sec:conformance}).
+
 \vspace{0.5em}\noindent\rule{\textwidth}{0.3pt}\vspace{0.5em}
-\noindent\textit{The next sections specify payload contents: per-process payloads (Section~\ref{sec:payloads}), investigation-mode payloads (Section~\ref{sec:investigation}), and the three-state page model (Section~\ref{sec:threestate}).}
+\noindent\textit{The next sections specify payload contents: per-process payloads (Section~\ref{sec:payloads}), investigation-mode payloads (Section~\ref{sec:investigation}), and the four-state page model (Section~\ref{sec:threestate}).}
 
 %% ======================================================================
 \newpage
@@ -643,7 +729,7 @@ Stores the identity and metadata of a loaded library (DLL, .so): file path, vers
 +0x14 & 4 & \field{Reserved} & R & Zero. \\
 +0x18 & var & \field{Path} & --- & UTF-8, pad8. \\
 $+p$ & var & \field{Version} & --- & UTF-8, pad8. \\
-$+v$ & 32 & \field{DiskHash} & --- & \blake{} of on-disk binary. 32 zero bytes if unavailable. \\
+$+v$ & 32 & \field{DiskHash} & --- & $H$ (\field{HashAlgo}, Section~\ref{sec:hashchain}) of on-disk binary. 32 zero bytes if unavailable. \\
 $+v{+}32$ & 4 & \field{BlobLen} & BL & NativeBlob size. \\
 $+v{+}36$ & 4 & \field{Reserved2} & R & Zero. \\
 $+v{+}40$ & var & \field{NativeBlob} & --- & OS-native opaque data. \\\bottomrule
@@ -803,19 +889,249 @@ A Key Hint block annotates a region of captured memory that is believed to conta
 \end{tabular}\end{minipage}
 \end{table}
 
+\subsection{Thread Context (\hex{0011})}\label{sec:threadctx}
+A Thread Context block records the execution state of a single thread of the target process at acquisition time: the thread identifier, scheduling state, an optional thread name, and a register file. One block is emitted per captured thread. These blocks let a consumer reconstruct the CPU state required to emulate or single-step execution forward from the captured memory image. Thread Context blocks are \OPTIONAL; their presence is advertised by the \field{ThreadContexts} bit (bit~2) in \field{CapBitmap}. \field{ParentUUID} \MAY{} reference the Process Identity block (\hex{0040}) or be zero.
+
+Thread Context is an evidence block: it \MUST{} be written in the capture segment (never in an extension segment, Section~\ref{sec:extsegments}) and \SHOULD{} precede the first Memory Region block so that consumers know the thread set before they classify regions (Section~\ref{sec:blockordering}).
+
+Exactly one Thread Context block in a file \SHOULD{} set the \field{Current} flag, identifying the thread whose register file---in particular its program counter---represents the natural resumption point for emulation. If no block sets \field{Current}, consumers \SHOULD{} treat the first Thread Context block in file order as current.
+
+\begin{table}[H]\centering\caption{Thread Context payload.}\label{tab:threadctx}\small
+\begin{tabular}{M M l l p{6cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
++0x00 & 8 & \field{ThreadID} & TID & OS thread identifier (TID). 0 if unknown. \\
++0x08 & 8 & \field{StartTime} & StTm & Thread start time (UTC, ns since epoch). 0 if unknown. \\
++0x10 & 2 & \field{Flags} & --- & Bit~0=\field{Current}, bit~1=\field{Crashed}, bit~2=\field{Suspended} (registers were read from a stopped thread and are self-consistent), bit~3=\field{Partial} (register file incomplete). Bits 4--15 reserved. \\
++0x12 & 1 & \field{ThreadState} & TS & \hex{00}=Unknown, \hex{01}=Running, \hex{02}=Sleeping, \hex{03}=Stopped, \hex{04}=Waiting, \hex{05}=Uninterruptible, \hex{06}=Halted, \hex{07}=Zombie. \\
++0x13 & 1 & \field{Arch} & Ar & 0~=~same as the file header \field{ArchType}; otherwise the \field{ArchType} code (Table~\ref{tab:platformcodes}b) of the mode this thread executes in (e.g., a WOW64 x86 thread in an x86\_64 process, or an ARM64EC thread). Codes above \hex{FF} are not representable and \MUST{} be written as~0. \\
++0x14 & 4 & \field{RegCount} & RCt & Number of register entries that follow. \\
++0x18 & 2 & \field{NameLen} & NL & Thread name length (incl.\ null). 0 if N/A. \\
++0x1A & 6 & \field{Reserved2} & R & Zero. \\
++0x20 & var & \field{ThreadName} & --- & UTF-8, pad8. Omitted when \field{NameLen}=0. \\
+$+n$ & var & \field{Registers} & --- & \field{RegCount} register entries (Table~\ref{tab:threadreg}). \\\bottomrule
+\end{tabular}\end{table}
+
+\noindent Each register entry is self-describing and 8-byte aligned. The entry start (\texttt{+0x00} below) is relative to the start of that entry.
+
+\begin{table}[H]\centering\caption{Thread Context register entry.}\label{tab:threadreg}\small
+\begin{tabular}{M M l l p{6cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
++0x00 & 1 & \field{NameLen} & NL & Register name length (incl.\ null). \\
++0x01 & 1 & \field{Width} & W & Value width in bytes (e.g.\ 8 for GPRs; 16/32/64 for vector registers). \\
++0x02 & 2 & \field{Flags} & --- & Bit~0=program counter, bit~1=stack pointer, bit~2=frame pointer, bit~3=flags register, bit~4=thread pointer / TLS base, bit~5=link register. Bits 6--15 reserved. \\
++0x04 & 4 & \field{Reserved} & R & Zero. \\
++0x08 & var & \field{Name} & --- & UTF-8, pad8. Lowercase canonical register mnemonic. \\
+$+m$ & var & \field{Value} & --- & \field{Width} bytes. Integer registers in the file's byte order (\field{Endianness}, Section~\ref{sec:encoding}); vector registers in the target's native lane order. Pad to 8B. \\\bottomrule
+\end{tabular}\end{table}
+
+Register names \MUST{} be the lowercase canonical mnemonic for the target architecture (e.g.\ \texttt{rax}, \texttt{rip}, \texttt{rsp}, \texttt{rflags} on x86\_64; \texttt{x0}--\texttt{x30}, \texttt{sp}, \texttt{pc}, \texttt{pstate} on ARM64). A producer that emits a Thread Context block \MUST{} include at least the program-counter and stack-pointer registers, and \SHOULD{} set the program-counter, stack-pointer, frame-pointer, and flags bits in \field{Flags} on the corresponding entries so that consumers can locate them without architecture-specific knowledge. Consumers \MUST{} preserve registers whose names they do not recognize and skip each entry via its declared \field{NameLen}/\field{Width} extents.
+
+A producer \MUST{} set \field{Suspended} only when the thread was stopped while its registers were read (e.g., ptrace-stopped, debugger-halted); registers sampled from a running thread \MUST{} leave the bit clear, since they may not form a consistent snapshot. \field{Partial} \MUST{} be set when the producer could not read every register it would normally record. Consumers \MAY{} use the stack-pointer entries to attribute Memory Regions to threads (stack classification). Importers (Section~\ref{sec:import}) \MAY{} emit Thread Context blocks from source-format thread records, such as ELF core \texttt{NT\_PRSTATUS} notes or Minidump thread lists.
+
+\begin{figure}[H]\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x0011}};
+\node[fld, text width=0.9cm, fill=fldData, draw=fldDataB, right=0pt of hdr] (tid) {\textbf{TID}\\8};
+\node[fld, text width=0.9cm, fill=fldData, draw=fldDataB, right=0pt of tid] (st) {\textbf{StTm}\\8};
+\node[fld, text width=0.7cm, fill=fldData, draw=fldDataB, right=0pt of st] (fl) {\textbf{Flags}\\2};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of fl] (ts) {\textbf{TS}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of ts] (ar) {\textbf{Ar}\\1};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of ar] (rc) {\textbf{RCt}\\4};
+\node[fld, text width=0.5cm, fill=fldData, draw=fldDataB, right=0pt of rc] (nl) {\textbf{NL}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of nl] (r1) {\textbf{R}\\6};
+\node[fld, text width=1.75cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of r1] (tn) {\textbf{ThreadName}\\var};
+\node[fld, text width=1.6cm, fill=fldVar, draw=fldVarB, right=0pt of tn] (regs) {\textbf{Registers}\\var};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of tid.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=navy] (tid.south west)--(r1.south east) node[midway, below=18pt, font=\tiny\color{navy}] {Fixed (32\,B)};
+\node[fld, text width=0.5cm, fill=fldData, draw=fldDataB, anchor=north west] (enl) at ([yshift=-2.4cm]hdr.south west) {\textbf{NL}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of enl] (ew) {\textbf{W}\\1};
+\node[fld, text width=0.7cm, fill=fldData, draw=fldDataB, right=0pt of ew] (efl) {\textbf{Flags}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of efl] (er) {\textbf{R}\\4};
+\node[fld, text width=1.4cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of er] (en) {\textbf{Name}\\var};
+\node[fld, text width=1.4cm, fill=fldVar, draw=fldVarB, right=0pt of en] (ev) {\textbf{Value}\\W\,B, pad8};
+\node[fld, text width=0.7cm, fill=fldMore, draw=fldMoreB, right=0pt of ev] (emore) {$\cdots$};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (enl.south west)--(ev.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one register entry ($\times$RCt), 8-byte aligned};
+\draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (regs.south) to[out=-90, in=90] (emore.north);
+\end{tikzpicture}}\caption{Thread Context (\hex{0011}). Abbreviations per Tables~\ref{tab:threadctx} and~\ref{tab:threadreg}.}\label{fig:threadctx-payload}\end{figure}
+
+\subsection{VAS Map (\hex{1001})}\label{sec:vasmap}
+A VAS Map records the target's enumerated virtual address space as a list of ranges with protection, type, and mapped path---one entry per range the acquirer enumerated, whether or not its bytes were captured. It is the only block from which a consumer can tell which parts of the address space existed but were not stored. Although it is a Structural-namespace block (Section~\ref{sec:typeregs}), an acquirer \MAY{} write it at capture time; the \textbf{RECOMMENDED} position is immediately before the End-of-Capture block, after all Memory Region and Module Entry blocks. An analysis tool \MAY{} instead add it in an extension segment (Section~\ref{sec:extsegments}). When a file contains several VAS Maps, the last one in file order supersedes earlier ones. \field{ParentUUID} is zero.
+
+\begin{table}[H]\centering\caption{VAS Map payload.}\label{tab:vasmap}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
+\multicolumn{5}{l}{\textit{\color{fldPreambleB}--- Preamble ---}} \\
++0x00 & 4 & \field{Count} & Cnt & Number of entries. \\
++0x04 & 4 & \field{EntrySize} & ESz & Size in bytes of every entry when all entries are the same size; 0~=~variable (each entry sized by its \field{PathLen}). \\
+\multicolumn{5}{l}{\textit{\color{fldDataB}--- Entry (repeated $\times$\field{Count}), offsets relative to entry start ---}} \\
++0x00 & 8 & \field{BaseAddr} & --- & Virtual address of first byte. \\
++0x08 & 8 & \field{RegionSize} & RegnSz & Range size in bytes. \\
++0x10 & 1 & \field{Protection} & Pr & As Table~\ref{tab:memregion}. \\
++0x11 & 1 & \field{RegionType} & RT & As Table~\ref{tab:memregion}. \\
++0x12 & 2 & \field{PathLen} & PL & Mapped path length (incl.\ null). 0 if none. \\
++0x14 & 1 & \field{NameSource} & NS & Origin of \field{MappedPath} and \field{RegionType} (below). \\
++0x15 & 3 & \field{Reserved} & R & Zero. \\
++0x18 & var & \field{MappedPath} & --- & UTF-8, pad8. Omitted when \field{PathLen}=0. \\\bottomrule
+\end{tabular}\end{table}
+
+\noindent\textbf{\field{NameSource} codes.} \hex{00}=Unspecified (a consumer infers: an entry in the capture segment of a file without the \field{Imported} flag was enumerated live); \hex{01}=Live (enumerated from the running process by the acquirer); \hex{02}=SourceMetadata (taken from the metadata of an imported dump, e.g., ELF \texttt{NT\_FILE} or Minidump module/memory-info streams); \hex{03}=Synthesized (derived by the producer, e.g., from captured region boundaries or heuristics). Files written before this revision carry zero at \texttt{+0x14}, which reads as Unspecified. Consumers \SHOULD{} trust names only from Live or SourceMetadata entries when classifying regions.
+
+\noindent\textbf{Semantics.} An entry whose \field{BaseAddr} has no Memory Region block of the same base means the range existed at enumeration time but its bytes were not stored (omitted by scope, excluded, or never attempted); the Region Omission Manifest (Section~\ref{sec:omission}) says why. A Memory Region without a matching VAS Map entry is a range the enumerator did not report. Consumers \MUSTNOT{} derive page states from the VAS Map; the \field{PageStateMap} (Section~\ref{sec:threestate}) is authoritative for captured ranges.
+
+\begin{figure}[H]\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x1001}};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of hdr] (cnt) {\textbf{Cnt}\\4};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of cnt] (esz) {\textbf{ESz}\\4};
+\node[fld, text width=1.2cm, fill=fldData, draw=fldDataB, right=0pt of esz] (ba) {\textbf{BaseAddr}\\8};
+\node[fld, text width=1.0cm, fill=fldData, draw=fldDataB, right=0pt of ba] (rs) {\textbf{RegnSz}\\8};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of rs] (pr) {\textbf{Pr}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of pr] (rt) {\textbf{RT}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of rt] (pl) {\textbf{PL}\\2};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of pl] (ns) {\textbf{NS}\\1};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of ns] (r) {\textbf{R}\\3};
+\node[fld, text width=1.8cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of r] (path) {\textbf{MappedPath}\\var};
+\node[fld, text width=0.7cm, fill=fldMore, draw=fldMoreB, right=0pt of path] (more) {$\cdots$};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of cnt.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=fldPreambleB] (cnt.south west)--(esz.south east) node[midway, below=18pt, font=\tiny\color{fldPreambleB}] {Preamble (8\,B)};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (ba.south west)--(path.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one entry, 24-B head + path ($\times$Cnt)};
+\end{tikzpicture}}\caption{VAS Map (\hex{1001}). Abbreviations per Table~\ref{tab:vasmap}.}\label{fig:vasmap-payload}\end{figure}
+
+\subsection{Physical Memory Map (\hex{0059})}\label{sec:physmap}
+A Physical Memory Map records the host's physical address ranges (e.g., the top-level entries of Linux \texttt{/proc/iomem}: ``System RAM'', ``Reserved'', PCI windows) at acquisition time. It gives analysis tools that correlate a process capture with a physical memory image the layout they need to translate addresses. The block is \OPTIONAL{} and is defined here so that the type code and layout are stable; it is not yet emitted by any known producer. It \MAY{} be written in the capture segment or in an extension segment (Section~\ref{sec:extsegments}). \field{ParentUUID} is zero.
+
+\begin{table}[H]\centering\caption{Physical Memory Map payload.}\label{tab:physmap}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
+\multicolumn{5}{l}{\textit{\color{fldPreambleB}--- Preamble ---}} \\
++0x00 & 4 & \field{RowCount} & RC & Number of rows. \\
++0x04 & 4 & \field{Reserved} & R & Zero. \\
+\multicolumn{5}{l}{\textit{\color{fldDataB}--- Row (repeated $\times$\field{RowCount}), offsets relative to row start ---}} \\
++0x00 & 8 & \field{Start} & --- & First physical address of the range. \\
++0x08 & 8 & \field{End} & --- & Last physical address of the range (inclusive, as reported by \texttt{/proc/iomem}). \\
++0x10 & 2 & \field{LabelLen} & LL & Byte length of \field{Label}. \textbf{No} terminating NUL. \\
++0x12 & 2 & \field{Reserved} & R & Zero. \\
++0x14 & var & \field{Label} & --- & UTF-8, exactly \field{LabelLen} bytes, \textbf{not} padded. \\\bottomrule
+\end{tabular}\end{table}
+
+\noindent Rows are packed back to back and are therefore not 8-byte aligned; only the payload as a whole is padded to an 8-byte boundary. Consumers \MUST{} walk rows by \field{LabelLen}.
+
+\begin{figure}[H]\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x0059}};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of hdr] (rc) {\textbf{RC}\\4};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of rc] (r) {\textbf{R}\\4};
+\node[fld, text width=1.0cm, fill=fldData, draw=fldDataB, right=0pt of r] (st) {\textbf{Start}\\8};
+\node[fld, text width=1.0cm, fill=fldData, draw=fldDataB, right=0pt of st] (en) {\textbf{End}\\8};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of en] (ll) {\textbf{LL}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of ll] (r2) {\textbf{R}\\2};
+\node[fld, text width=1.8cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of r2] (lab) {\textbf{Label}\\LL\,B, no pad};
+\node[fld, text width=0.7cm, fill=fldMore, draw=fldMoreB, right=0pt of lab] (more) {$\cdots$};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of rc.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=fldPreambleB] (rc.south west)--(r.south east) node[midway, below=18pt, font=\tiny\color{fldPreambleB}] {Preamble (8\,B)};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (st.south west)--(lab.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one row, packed ($\times$RC)};
+\end{tikzpicture}}\caption{Physical Memory Map (\hex{0059}). Abbreviations per Table~\ref{tab:physmap}.}\label{fig:physmap-payload}\end{figure}
+
+\subsection{Module Build-ID Manifest (\hex{005A})}\label{sec:buildid}
+A Module Build-ID Manifest supplements the Module Entry blocks of a capture with build identifiers (ELF \texttt{NT\_GNU\_BUILD\_ID}, PE CodeView GUID+age, Mach-O \texttt{LC\_UUID}) and on-disk hashes that were not available---or not yet computed---when the acquirer wrote the module list. It is written by enrichment tools, either in the capture segment or in an extension segment (Section~\ref{sec:extsegments}). Readers merge rows into the module list by matching \field{BaseAddr} against Module Entry \field{BaseAddr}; a non-zero \field{DiskHash} in a row supersedes an all-zero \field{DiskHash} in the matching Module Entry. Rows whose \field{BaseAddr} matches no Module Entry \SHOULD{} be reported as dangling (Section~\ref{sec:crossref}) but \MUSTNOT{} be discarded. \field{ParentUUID} is zero.
+
+\begin{table}[H]\centering\caption{Module Build-ID Manifest payload.}\label{tab:buildid}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
+\multicolumn{5}{l}{\textit{\color{fldPreambleB}--- Preamble ---}} \\
++0x00 & 4 & \field{RowCount} & RC & Number of 64-byte rows. \\
++0x04 & 4 & \field{Reserved} & R & Zero. \\
+\multicolumn{5}{l}{\textit{\color{fldDataB}--- Row (repeated $\times$\field{RowCount}), 64 bytes fixed, offsets relative to row start ---}} \\
++0x00 & 8 & \field{BaseAddr} & --- & Module load address; join key to Module Entry / Module List Index. \\
++0x08 & 1 & \field{BuildIdLen} & BL & Valid bytes in \field{BuildId}: 0 (none), 16, or 20. \\
++0x09 & 1 & \field{BuildIdSource} & BS & How the build ID was obtained (below). \\
++0x0A & 1 & \field{Flags} & --- & Bit~0=\field{Deleted} (backing file unlinked while mapped), bit~1=\field{MemFd} (anonymous \texttt{memfd} mapping), bit~2=\field{AnonRWX} (anonymous mapping with RWX protection), bit~3=\field{Unlinked} (path not found on disk). Bits 4--7 reserved. \\
++0x0B & 1 & \field{Reserved} & R & Zero. \\
++0x0C & 20 & \field{BuildId} & --- & Build identifier, zero-padded to 20 bytes. \\
++0x20 & 32 & \field{DiskHash} & --- & $H$ (\field{HashAlgo}) of the on-disk binary, zero-padded; 32 zero bytes if unavailable. \\\bottomrule
+\end{tabular}\end{table}
+
+\noindent\textbf{\field{BuildIdSource} codes.} 0=None, 1=Bridge (reported by the instrumentation bridge, e.g., Frida/GDB/LLDB), 2=MapFiles (read from the mapped file via \texttt{/proc/pid/}\allowbreak\texttt{map\_files}), 3=OnDisk (read from the file at its recorded path), 4=CapturedRegion (parsed from the captured image bytes), 5=Retroactive (computed after acquisition by an enrichment tool).
+
+\begin{figure}[H]\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x005A}};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of hdr] (rc) {\textbf{RC}\\4};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of rc] (r) {\textbf{R}\\4};
+\node[fld, text width=1.2cm, fill=fldData, draw=fldDataB, right=0pt of r] (ba) {\textbf{BaseAddr}\\8};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of ba] (bl) {\textbf{BL}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of bl] (bs) {\textbf{BS}\\1};
+\node[fld, text width=0.7cm, fill=fldData, draw=fldDataB, right=0pt of bs] (fl) {\textbf{Flags}\\1};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of fl] (r2) {\textbf{R}\\1};
+\node[fld, text width=1.4cm, fill=fldUUID, draw=fldUUIDB, right=0pt of r2] (bid) {\textbf{BuildId}\\20};
+\node[fld, text width=1.8cm, fill=fldCrypto, draw=fldCryptoB, right=0pt of bid] (dh) {\textbf{DiskHash}\\32};
+\node[fld, text width=0.7cm, fill=fldMore, draw=fldMoreB, right=0pt of dh] (more) {$\cdots$};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of rc.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=fldPreambleB] (rc.south west)--(r.south east) node[midway, below=18pt, font=\tiny\color{fldPreambleB}] {Preamble (8\,B)};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (ba.south west)--(dh.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one row, 64\,B fixed ($\times$RC)};
+\end{tikzpicture}}\caption{Module Build-ID Manifest (\hex{005A}). Abbreviations per Table~\ref{tab:buildid}.}\label{fig:buildid-payload}\end{figure}
+
+\subsection{Region Omission Manifest (\hex{005B})}\label{sec:omission}
+A Region Omission Manifest lists the address ranges that the acquirer \emph{deliberately} did not capture---because of a region scope selection (e.g., heap and stack only) or module exclusion patterns---so that a consumer can distinguish a partial capture from an incomplete one. Omitted ranges are absent from the Memory Region stream but present in the VAS Map (Section~\ref{sec:vasmap}); this block records the reason. A producer \MUST{} emit it only when at least one range was omitted, and \MAY{} write it in the capture segment or in an extension segment (Section~\ref{sec:extsegments}). \field{ParentUUID} is zero.
+
+Unlike the general convention of Section~\ref{sec:encoding}, the strings in this block carry \textbf{no terminating NUL}: every length field counts UTF-8 bytes only, and each string is zero-padded to an 8-byte boundary.
+
+\begin{table}[H]\centering\caption{Region Omission Manifest payload.}\label{tab:omission}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
+\multicolumn{5}{l}{\textit{\color{fldPreambleB}--- Preamble ---}} \\
++0x00 & 4 & \field{RowCount} & RC & Number of rows. \\
++0x04 & 4 & \field{Reserved} & R & Zero. \\
++0x08 & 2 & \field{ScopeLen} & SL & Byte length of \field{Scope} (no NUL). 0 if none. \\
++0x0A & 2 & \field{PatternsLen} & PtL & Byte length of \field{Patterns} (no NUL). 0 if none. \\
++0x0C & 4 & \field{Reserved2} & R & Zero. \\
++0x10 & var & \field{Scope} & --- & UTF-8, pad8. The scope selection as given to the acquirer (e.g., \texttt{heap,stack}). \\
+$+s$ & var & \field{Patterns} & --- & UTF-8, pad8. Exclusion patterns joined with \texttt{\char92 n} (\hex{0A}). \\
+\multicolumn{5}{l}{\textit{\color{fldDataB}--- Row (repeated $\times$\field{RowCount}), 24-byte head + name, offsets relative to row start ---}} \\
++0x00 & 8 & \field{BaseAddr} & --- & Virtual address of first byte of the omitted range. \\
++0x08 & 8 & \field{Size} & --- & Range size in bytes. \\
++0x10 & 1 & \field{Protection} & Pr & As Table~\ref{tab:memregion}. \\
++0x11 & 1 & \field{RegionType} & RT & As Table~\ref{tab:memregion}. \\
++0x12 & 1 & \field{Reason} & Rsn & 1=ModuleExclude (matched an exclusion pattern), 2=Scope (outside the selected region scope). 3--255 reserved. \\
++0x13 & 1 & \field{Reserved} & R & Zero. \\
++0x14 & 2 & \field{NameLen} & NL & Byte length of \field{Name} (no NUL). 0 if none. \\
++0x16 & 2 & \field{Reserved2} & R & Zero. \\
++0x18 & var & \field{Name} & --- & UTF-8, pad8. Mapped path or region name. Omitted when \field{NameLen}=0. \\\bottomrule
+\end{tabular}\end{table}
+
+\begin{figure}[H]\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x005B}};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of hdr] (rc) {\textbf{RC}\\4};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of rc] (r) {\textbf{R}\\4};
+\node[fld, text width=0.5cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of r] (sl) {\textbf{SL}\\2};
+\node[fld, text width=0.5cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of sl] (ptl) {\textbf{PtL}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of ptl] (r2) {\textbf{R}\\4};
+\node[fld, text width=1.4cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of r2] (sc) {\textbf{Scope}\\var};
+\node[fld, text width=1.4cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of sc] (pt) {\textbf{Patterns}\\var};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of rc.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=fldPreambleB] (rc.south west)--(pt.south east) node[midway, below=18pt, font=\tiny\color{fldPreambleB}] {Preamble (16\,B + strings)};
+\node[fld, text width=1.2cm, fill=fldData, draw=fldDataB, anchor=north west] (ba) at ([yshift=-2.4cm]hdr.south west) {\textbf{BaseAddr}\\8};
+\node[fld, text width=0.9cm, fill=fldData, draw=fldDataB, right=0pt of ba] (sz) {\textbf{Size}\\8};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of sz] (pr) {\textbf{Pr}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of pr] (rt) {\textbf{RT}\\1};
+\node[fld, text width=0.5cm, fill=fldData, draw=fldDataB, right=0pt of rt] (rsn) {\textbf{Rsn}\\1};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of rsn] (r3) {\textbf{R}\\1};
+\node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of r3] (nl) {\textbf{NL}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of nl] (r4) {\textbf{R}\\2};
+\node[fld, text width=1.6cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of r4] (nm) {\textbf{Name}\\var};
+\node[fld, text width=0.7cm, fill=fldMore, draw=fldMoreB, right=0pt of nm] (more) {$\cdots$};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (ba.south west)--(nm.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one row, 24-B head + name ($\times$RC)};
+\draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (pt.south) to[out=-90, in=90] (more.north);
+\end{tikzpicture}}\caption{Region Omission Manifest (\hex{005B}). Abbreviations per Table~\ref{tab:omission}.}\label{fig:omission-payload}\end{figure}
+
 %% ======================================================================
 \newpage
 \section{Investigation Mode}\label{sec:investigation}
 %% ======================================================================
 When \field{Investigation} (bit~1) is set, the acquirer \MUST{} capture system-wide context alongside per-process memory: acquisition operator, system hostname, and system-wide tables (process list, network connections, open handles). When not set, the acquisition is in Analysis mode and \MUST{} follow Figure~\ref{fig:acq-sequence}.
 
-\subsection{Block Ordering}
+\subsection{Block Ordering}\label{sec:blockordering}
 \begin{enumerate}[leftmargin=1.8em, itemsep=2pt]
 \item \textbf{Block~0:} Process Identity (\hex{0040}).
 \item \textbf{Block~1:} Module List Index (\hex{0010}).
 \item \textbf{Block~2:} System Context (\hex{0050}) --- \REQUIRED.
 \end{enumerate}
-System-wide table blocks (\hex{0051}--\hex{0053}) follow with \field{ParentUUID} referencing the System Context block.
+System-wide table blocks (\hex{0051}--\hex{0053}) follow with \field{ParentUUID} referencing the System Context block; a Connectivity Table (\hex{0054}, Section~\ref{sec:block:connectivity-table}) \MAY{} follow them with \field{ParentUUID} zero. Thread Context blocks (\hex{0011}), when present, \SHOULD{} precede the first Memory Region block in either mode (Section~\ref{sec:threadctx}, Figure~\ref{fig:acq-sequence}).
 
 \begin{figure}[H]\centering
 \begin{tikzpicture}[blk/.style={draw, rounded corners=2pt, minimum height=1.0cm, text width=1.5cm, align=center, inner sep=2pt, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted},arr/.style={-{Stealth[length=4pt]}, thick, color=muted}]
@@ -838,13 +1154,13 @@ System-wide table blocks (\hex{0051}--\hex{0053}) follow with \field{ParentUUID}
 \caption{Investigation mode block sequence. System table blocks reference System Context via \field{ParentUUID}.}\label{fig:inv-sequence}\end{figure}
 
 \subsection{System Context Block (\hex{0050})}\label{sec:sysctx}
-The System Context block captures system-wide metadata at acquisition time: the identity of the acquisition operator, the target system's hostname and OS version, and a bitmap indicating which system-wide table blocks (\hex{0051}--\hex{0053}) are present. This block \MUST{} be Block~2 when \field{Investigation} is set. The \field{TableBitmap} allows consumers to determine which tables to expect without scanning ahead.
+The System Context block captures system-wide metadata at acquisition time: the identity of the acquisition operator, the target system's hostname and OS version, and a bitmap indicating which system-wide table blocks (\hex{0051}--\hex{0054}) are present. This block \MUST{} be Block~2 when \field{Investigation} is set. The \field{TableBitmap} allows consumers to determine which tables to expect without scanning ahead.
 
 \begin{table}[H]\centering\caption{System Context payload.}\label{tab:sysctx}\small
 \begin{tabular}{M M l l p{3.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
 +0x00 & 8 & \field{BootTime} & BootTm & System boot time. 0 if unknown. \\
 +0x08 & 4 & \field{TargetCount} & TCt & Processes targeted this session. \\
-+0x0C & 4 & \field{TableBitmap} & TBm & Bit~0=ProcessTable, 1=ConnectionTable, 2=HandleTable. \\
++0x0C & 4 & \field{TableBitmap} & TBm & Bit~0=ProcessTable, 1=ConnectionTable, 2=HandleTable, 3=ConnectivityTable (Table~\ref{tab:sysctx-bitmap}). \\
 +0x10 & 2 & \field{AcqUserLen} & --- & Incl.\ null. \\
 +0x12 & 2 & \field{HostnameLen} & --- & Incl.\ null. \\
 +0x14 & 2 & \field{DomainLen} & --- & 0 if N/A. \\
@@ -861,9 +1177,9 @@ $+o$ & var & \field{CaseRef} & --- & UTF-8, pad8. Omitted if len=0. \\\bottomrul
 The \field{TableBitmap} field advertises which tables and system-context
 extension blocks are present in the slice. Each bit is associated with a
 single block identifier, so that a reader can derive the expected block
-inventory directly from the SystemContext block rather than by scanning
+inventory directly from the System Context block rather than by scanning
 the slice. Bit assignments are listed in Table~\ref{tab:sysctx-bitmap};
-bits~10--31 are reserved and shall be emitted as zero.
+bits~4--31 are reserved and \MUST{} be emitted as zero.
 
 \begin{table}[H]\centering\caption{\field{TableBitmap} bit assignments.}\label{tab:sysctx-bitmap}\small
 \begin{tabular}{c l l p{5.5cm}}\toprule
@@ -872,7 +1188,6 @@ bits~10--31 are reserved and shall be emitted as zero.
 1 & 0x0002 & \field{ConnectionTable} (\texttt{0x0052}) & The system socket-connection table is emitted. \\
 2 & 0x0004 & \field{HandleTable} (\texttt{0x0053}) & The per-target handle table is emitted. \\
 3 & 0x0008 & \field{ConnectivityTable} (\texttt{0x0054}) & The collector produced at least one row of kernel network state (routes, ARP, packet sockets, interface counters, socket-family aggregates, or MIB counters). \\
-
 \bottomrule
 \end{tabular}\end{table}
 
@@ -893,7 +1208,7 @@ bits~10--31 are reserved and shall be emitted as zero.
 \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=navy] (bt.south west)--(r.south east) node[midway, below=18pt, font=\tiny\color{navy}] {Fixed (32\,B)};
 \end{tikzpicture}}\caption{System Context (\hex{0050}). Abbreviations per Table~\ref{tab:sysctx}.}\label{fig:sysctx-layout}\end{figure}
 
-The block definitions that follow specify the system-context metadata classes in the identifier range \texttt{0x0051}--\texttt{0x0054}. Each block is additive: readers that do not recognize a block type skip it according to the rules of Section~\ref{sec:blocks}, and the format therefore remains forward compatible. Presence is advertised through a dedicated bit in the SystemContext \field{TableBitmap} (Table~\ref{tab:sysctx-bitmap}).
+The block definitions that follow specify the system-context metadata classes in the identifier range \texttt{0x0051}--\texttt{0x0054}. Each block is additive: readers that do not recognize a block type skip it according to the rules of Section~\ref{sec:blocks}, and the format therefore remains forward compatible. Presence is advertised through a dedicated bit in the System Context \field{TableBitmap} (Table~\ref{tab:sysctx-bitmap}).
 
 \subsection{Process Table (\hex{0051})}\label{sec:proctable}
 System-wide process snapshot. \field{ParentUUID} \MUST{} reference the System Context block.
@@ -1024,29 +1339,34 @@ System-wide file descriptors/handles. \field{ParentUUID} \MUST{} reference Syste
 \end{tikzpicture}}\caption{Handle Table (\hex{0053}). Abbreviations per Table~\ref{tab:handleentry}.}\label{fig:handletable-payload}\end{figure}
 
 
-\subsection{Connectivity Table Block (\texttt{0x0055})}
+\subsection{Connectivity Table (\hex{0054})}
 \label{sec:block:connectivity-table}
 
 The Connectivity Table records kernel network state that has no
 socket-endpoint representation and therefore does not fit the schema of the Connection Table block (\texttt{0x0052}). The two blocks are complementary: endpoints with process attribution remain in the Connection Table, while routing entries, neighbour-discovery (ARP) caches, raw packet sockets, per-interface counters, aggregate socket-family statistics, and Management Information Base (MIB) counters are recorded here. The separation allows downstream analyzers to distinguish the two forensic questions of \emph{who} was connected to \emph{what} and \emph{what was the network state at capture time}. The
 latter is essential for detecting raw-socket observers whose presence is invisible to the conventional socket table, because they possess neither an address nor a port tuple.
 
-The payload is a heterogeneous tagged-row table. Each row begins with a one-byte row-type discriminator, followed by a two-byte row length and a row-type-specific body. Seven row shapes are defined; readers that do not recognize a row type advance by \texttt{RowLen} bytes.
+The block is emitted only in Investigation mode; its presence is advertised by \field{TableBitmap} bit~3 (Table~\ref{tab:sysctx-bitmap}). Unlike \hex{0051}--\hex{0053}, \field{ParentUUID} is zero. The payload is a heterogeneous tagged-row table. Each row begins with a one-byte row-type discriminator, followed by a two-byte row length and a row-type-specific body. Seven row shapes are defined; readers that do not recognize a row type advance by \texttt{RowLen} bytes.
 
 \begin{table}[H]\centering\caption{Connectivity Table payload.}\label{tab:block:ct}\small
 \begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
 +0x00 & 4   & \field{RowCount} & RC  & Total number of rows across all row types. \\
-+0x04 & 4   & \field{Reserved} & --- & Must be zero. \\
++0x04 & 4   & \field{Reserved} & R   & Zero. \\
 +0x08 & var & \field{Rows}     & --- & Concatenation of tagged rows (see Table~\ref{tab:block:ct-rows}). \\\bottomrule
 \end{tabular}\end{table}
 
 Each row is prefixed by \texttt{RowType(1)\,RowLen(2)} and followed by
-\texttt{RowLen} bytes of row-specific body. The defined row types are
-enumerated in Table~\ref{tab:block:ct-rows}. String-typed fields within
-row bodies use a two-byte length prefix followed by \texttt{Len} bytes
-of UTF-8 content. All multi-byte integers are little-endian. IPv4
-addresses are carried as four raw bytes in network order; IPv6 addresses
-as sixteen raw bytes.
+\texttt{RowLen} bytes of row-specific body (\texttt{RowLen} excludes the
+3-byte prefix). Rows are packed back to back without internal padding;
+only the payload as a whole is padded to an 8-byte boundary. The defined
+row types are enumerated in Table~\ref{tab:block:ct-rows}. String-typed
+fields within row bodies use a two-byte length prefix followed by
+\texttt{Len} bytes of UTF-8 content (no NUL). All multi-byte integers are
+little-endian. IPv4 addresses are carried as four raw bytes in network
+order; IPv6 addresses as sixteen raw bytes. Row \hex{07} stores
+\texttt{Value} as an unsigned 8-byte field; counters the kernel reports as
+signed (e.g., \texttt{Tcp.MaxConn}~=~$-1$) are written in two's complement
+so that the evidence survives verbatim.
 
 \begin{table}[H]\centering\caption{Connectivity Table row-type discriminators.}\label{tab:block:ct-rows}\small
 \begin{tabular}{c l p{9.2cm}}\toprule
@@ -1070,7 +1390,7 @@ as sixteen raw bytes.
 
 \begin{figure}[H]\centering
 \resizebox{\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
-\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x0055}};
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x0054}};
 \node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of hdr] (rc) {\textbf{RC}\\4};
 \node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of rc] (r) {\textbf{R}\\4};
 \node[fld, text width=0.4cm, fill=fldData, draw=fldDataB, right=0pt of r] (rt) {\textbf{RT}\\1};
@@ -1081,7 +1401,7 @@ as sixteen raw bytes.
 \node[lbl, above=1pt of rc.north west, anchor=south west] {\hex{50}};
 \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=fldPreambleB] (rc.south west)--(r.south east) node[midway, below=18pt, font=\tiny\color{fldPreambleB}] {Preamble (8\,B)};
 \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (rt.south west)--(body.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one row ($\times$RC)};
-\end{tikzpicture}}\caption{Connectivity Table (\hex{0055}). Abbreviations per Table~\ref{tab:block:ct} and Table~\ref{tab:block:ct-rows}.}\label{fig:connectivity-payload}\end{figure}
+\end{tikzpicture}}\caption{Connectivity Table (\hex{0054}). Abbreviations per Tables~\ref{tab:block:ct} and~\ref{tab:block:ct-rows}.}\label{fig:connectivity-payload}\end{figure}
 
 
 
@@ -1096,26 +1416,29 @@ Investigation-mode fields such as \field{AcqUser}, \field{Hostname}, \field{Doma
 \end{itemize}
 
 %% ======================================================================
-\section{Three-State Virtual Address Map}\label{sec:threestate}
+\section{Page State Map}\label{sec:threestate}
 %% ======================================================================
-Each page within a Memory Region is classified into one of three states, encoded as 2~bits in the \field{PageStateMap}. This three-state model enforces \emph{epistemic honesty}: rather than silently omitting pages that could not be read, the format distinguishes successful capture from read failures and TOCTOU (Time-of-check to time-of-use)~races (pages that were mapped when the region was enumerated but absent when actually read). Table~\ref{tab:pagestates} defines the states; Figure~\ref{fig:pagestatemap} shows an example map.
+Each page within a Memory Region is classified into one of four states, encoded as 2~bits in the \field{PageStateMap}. This model enforces \emph{epistemic honesty}: rather than silently omitting pages that could not be read, the format distinguishes successful capture from read failures and TOCTOU (Time-of-check to time-of-use)~races (pages that were mapped when the region was enumerated but absent when actually read). Table~\ref{tab:pagestates} defines the states; Figure~\ref{fig:pagestatemap} shows an example map.
 
 \begin{table}[H]\centering\caption{Page states.}\label{tab:pagestates}\small
-\begin{tabular}{M l p{5cm} l}\toprule\textbf{Bits}&\textbf{State}&\textbf{Meaning}&\textbf{PageData}\\\midrule
+\begin{tabular}{M l p{8cm} l}\toprule\textbf{Bits}&\textbf{State}&\textbf{Meaning}&\textbf{PageData}\\\midrule
 00 & Captured & Read OK; stored. & PageSize bytes \\
 01 & Failed & Mapped but unreadable. & 0 \\
 10 & Unmapped & TOCTOU: absent at read time. & 0 \\
-11 & \textit{Reserved} & Treat as Failed. & 0 \\\bottomrule
+11 & NotResident & Mapped but never touched at read time (anonymous memory, not present and not swapped); content is zero. Emitted only by resident-only acquisition. & 0 \\\bottomrule
 \end{tabular}\end{table}
+
+\noindent A NotResident page carries no data exactly like Failed and Unmapped. Readers that predate this state \MUST{} treat it as a 0-byte page; treating it as Failed is acceptable but overstates loss, since the page's content is known to be zero.
 
 \begin{figure}[H]\centering
 \begin{tikzpicture}[page/.style={draw=muted!50, minimum width=0.9cm, minimum height=0.7cm, align=center, font=\tiny}]
-\foreach \i/\bits/\state/\col in {0/00/Cap/psCaptured,1/00/Cap/psCaptured,2/00/Cap/psCaptured,3/01/Fail/psFailed,4/00/Cap/psCaptured,5/00/Cap/psCaptured,6/10/Unm/psUnmapped,7/10/Unm/psUnmapped,8/00/Cap/psCaptured,9/00/Cap/psCaptured,10/01/Fail/psFailed,11/00/Cap/psCaptured}
+\foreach \i/\bits/\state/\col in {0/00/Cap/psCaptured,1/00/Cap/psCaptured,2/00/Cap/psCaptured,3/01/Fail/psFailed,4/00/Cap/psCaptured,5/00/Cap/psCaptured,6/10/Unm/psUnmapped,7/10/Unm/psUnmapped,8/00/Cap/psCaptured,9/11/NRes/psNotResident,10/01/Fail/psFailed,11/00/Cap/psCaptured}
 {\node[page, fill=\col] at (\i*0.98,0) {\texttt{\bits}\\\state};}
 \matrix[anchor=west] at (0,-0.9) [column sep=5pt, font=\tiny] {
 \node[fill=psCaptured, draw=muted!50, minimum size=5pt] {}; & \node{Captured}; &
 \node[fill=psFailed, draw=muted!50, minimum size=5pt] {}; & \node{Failed}; &
-\node[fill=psUnmapped, draw=muted!50, minimum size=5pt] {}; & \node{Unmapped (TOCTOU)}; \\};
+\node[fill=psUnmapped, draw=muted!50, minimum size=5pt] {}; & \node{Unmapped (TOCTOU)}; &
+\node[fill=psNotResident, draw=muted!50, minimum size=5pt] {}; & \node{NotResident (zero content)}; \\};
 \end{tikzpicture}\caption{Example PageStateMap for a 12-page region.}\label{fig:pagestatemap}\end{figure}
 
 %% ======================================================================
@@ -1124,6 +1447,10 @@ Each page within a Memory Region is classified into one of three states, encoded
 \textbf{Layer~1: \field{ParentUUID}.} Header-level hierarchy. Module Entry $\to$ Module List; system tables $\to$ System Context.
 
 \textbf{Layer~2: Payload-embedded UUIDs.} Key Hint \field{RegionUUID} $\to$ Memory Region.
+
+\textbf{Address-keyed joins.} VAS Map entries (Section~\ref{sec:vasmap}), Module Build-ID Manifest rows (Section~\ref{sec:buildid}), and Region Omission Manifest rows (Section~\ref{sec:omission}) correlate with Memory Region and Module Entry blocks by \field{BaseAddr}, not by UUID.
+
+\textbf{Across segments.} Cross-references span segments: a block in an extension segment \MAY{} reference blocks in the capture segment or in earlier extension segments (Section~\ref{sec:extsegments}). Blocks in the capture segment never reference extension blocks, which are written later.
 
 \begin{figure}[H]\centering
 \begin{tikzpicture}[block/.style={draw, rounded corners=2pt, minimum height=0.9cm, align=center, font=\scriptsize, text width=2.4cm},parrow/.style={-{Stealth[length=4pt]}, thick, color=navy},earrow/.style={-{Stealth[length=4pt]}, thick, color=accent, dashed}]
@@ -1184,9 +1511,11 @@ Full-container encryption is chosen over per-block encryption to prevent metadat
 \begin{enumerate}[leftmargin=1.8em, itemsep=2pt]
 \item \textbf{File header (128\,B, cleartext):} Authenticated as Associated Data (AAD) to the AEAD, along with any KEM ciphertext. Tampering causes decryption failure.
 \item \textbf{KEM ciphertext (0 or variable, cleartext):} Present when \field{KeyEncap}$\neq$\hex{00}. Size is \field{KEMCtLen}. Also in AAD.
-\item \textbf{Encrypted block stream:} AEAD ciphertext of Block~0 through EoC. The only encrypted region.
+\item \textbf{Encrypted block stream:} AEAD ciphertext of Block~0 through EoC, followed by any extension segments (Section~\ref{sec:extsegments}). The only encrypted region.
 \item \textbf{AEAD authentication tag (16\,B, not encrypted):} Output of the AEAD. Required for decryption. Requires the symmetric key.
 \end{enumerate}
+
+\noindent\textbf{Extension segments in encrypted containers.} Extension segments \MUST{} lie inside the AEAD ciphertext, i.e., they are written before the AEAD is finalized, and the tag covers them. Because the tag at EOF authenticates the entire stream, nothing can be appended to a sealed container: producers \MUSTNOT{} write bytes after the tag, and consumers \MUST{} treat any bytes after the tag as trailing non-MSL data. Enriching an already-sealed file requires decrypting it and re-sealing the result with a fresh \field{Nonce}.
 
 \noindent\textbf{Chain-of-custody without the key.} Producers \SHOULD{} record an external hash of the complete file at acquisition time (\blake{} or SHA-256, offset~0 to EOF). This digest \SHOULD{} be stored in the case evidence log, not in the file.
 
@@ -1236,13 +1565,14 @@ The symmetric cipher always encrypts the data. \field{KeyEncap} determines how t
 \subsection{Interaction with the Integrity Chain}\label{sec:enc-integrity}
 When \field{Encrypted} is set:
 \begin{itemize}[leftmargin=1.5em, itemsep=2pt]
-\item \field{PrevHash}: \MUST{} be zero. AEAD authenticates atomically.
-\item EoC \field{FileHash}: \SHOULD{} be computed over plaintext (enables post-decryption verification).
+\item \field{PrevHash}: \MUST{} be zero in every block, in the capture segment and in extension segments. AEAD authenticates atomically.
+\item EoC \field{FileHash} and End-of-Extension \field{SegmentHash}: \SHOULD{} be computed over plaintext (enables post-decryption verification).
 \item AAD: File header (128\,B) + any KEM ciphertext.
+\item Extension segments (Section~\ref{sec:extsegments}) are part of the encrypted stream; the chain-continuity check is skipped (all \field{PrevHash} zero) but \field{SegmentHash} and \field{BlockCount} are verified after decryption. No segment \MAY{} be appended after the tag.
 \end{itemize}
 
 \subsection{Streaming Encryption}
-Producers \SHOULD{} encrypt incrementally: (1)~init AEAD with key, nonce, AAD; (2)~for each block, serialize, encrypt, write; (3)~after EoC, finalize AEAD, append 16-byte tag. A parallel \blake{} hasher computes plaintext FileHash before encryption. $O(1)$ memory.
+Producers \SHOULD{} encrypt incrementally: (1)~init AEAD with key, nonce, AAD; (2)~for each block, serialize, encrypt, write; (3)~after EoC and any extension segments, finalize AEAD, append 16-byte tag. A parallel hasher (\field{HashAlgo}) computes plaintext \field{FileHash} and \field{SegmentHash} before encryption. $O(1)$ memory.
 
 %% ======================================================================
 \newpage
@@ -1268,7 +1598,7 @@ $+t$ & var & \field{Note} & UTF-8, pad8. \\\bottomrule
 0x0000 & Unknown \\ 0x0001 & Raw byte stream \\ 0x0002 & ELF core dump \\ 0x0003 & Windows Minidump \\ 0x0004 & macOS core dump \\ 0x0005 & ProcDump \\ 0xFFFF & Other \\\bottomrule
 \end{tabular}\end{table}
 
-\noindent\textbf{Procedure:} (1) Set \field{Flags} bit~0. (2) Block~0: Import Provenance. (3) Regions from source. (4) Modules if available. (5) Hash chain and EoC.
+\noindent\textbf{Procedure:} (1) Set \field{Flags} bit~0. (2) Block~0: Import Provenance. (3) Regions from source. (4) Modules if available; Thread Contexts from source thread records if available (Section~\ref{sec:threadctx}). (5) VAS Map with \field{NameSource}=\hex{02} when the source carries mapping metadata (Section~\ref{sec:vasmap}). (6) Hash chain and EoC.
 
 %% ======================================================================
 \section{Parsing Walkthrough}\label{sec:parsing}
@@ -1276,9 +1606,9 @@ $+t$ & var & \field{Note} & UTF-8, pad8. \\\bottomrule
 \begin{description}[style=nextline, leftmargin=2em, itemsep=4pt]
 \item[Step 1:] Read 9 bytes. Verify magic. \field{Endianness} \MUST{} be \hex{01}. Read \field{HeaderSize}.
 \item[Step 2:] If \field{Encrypted}: read extension (\hex{40}--\hex{7F}). If \field{KEMCtLen}$>$0, read KEM ciphertext. Obtain key. Decrypt. Continue with plaintext.
-\item[Step 3:] Read blocks at \field{HeaderSize} (+\field{KEMCtLen} if encrypted). Verify \field{BlockLength}$\geq$80. Parse or skip via \field{BlockLength}. If \field{BlockCount}$>$0, verify parsed count matches.
-\item[Step 4:] If unencrypted: verify \blake{} chain. If encrypted: verify AEAD tag.
-\item[Step 5:] Verify EoC \field{FileHash} if present.
+\item[Step 3:] Read blocks at \field{HeaderSize} (+\field{KEMCtLen} if encrypted) up to the EoC block. Verify \field{BlockLength} $\geq$ 80. Parse or skip via \field{BlockLength}. Verify every non-zero \field{BlockCount} (header, EoC) against the parsed capture-segment count.
+\item[Step 4:] If unencrypted: verify the \field{PrevHash} chain with the algorithm selected by \field{HashAlgo}. If encrypted: verify AEAD tag.
+\item[Step 5:] Verify EoC \field{FileHash} if present. Then parse extension segments (Section~\ref{sec:extsegments}): verify chain continuity, \field{SegmentHash}, and \field{BlockCount} of each; the remainder is trailing data.
 \item[Step 6:] \field{Investigation}? Expect Block~2 = System Context.
 \item[Step 7:] \field{Imported}? Read Import Provenance.
 \end{description}
@@ -1316,7 +1646,7 @@ Module Entry block for \texttt{ntdll.dll} v\texttt{10.0.22621.1} at \hex{7FFDD4D
 \section{Conformance}\label{sec:conformance}
 %% ======================================================================
 \subsection{Producer}
-A conformant producer \MUST: (1) write valid header with \field{Magic}, \field{Endianness}=\hex{01}, \field{HeaderSize}, \field{Version}; (2) generate UUIDv4 in RFC~9562 binary layout; (3) compute \blake{} \field{PrevHash} (zero when encrypted); (4) set reserved fields to zero; (5) pad8 all variable fields; (6) never modify written blocks; (7) set \field{CapBitmap} accurately; (8) if importing: set \field{Flags} bit~0, emit Import Provenance as Block~0; (9) set \field{PayloadVersion} to~1; (10) set \field{CompAlgo} bits to 00 when uncompressed; (11) split regions exceeding $2^{32}{-}81$ bytes; (12) write 32 zero bytes for unavailable \field{DiskHash}; (13) reject \field{PageSizeLog2} outside $[10,40]$; (14) emit well-formed UTF-8 per RFC~3629 for all string fields; (15) convert port numbers from network byte order to little-endian before writing; (16) set \field{BlockCount} to the total number of blocks or zero if unknown.
+A conformant producer \MUST: (1) write valid header with \field{Magic}, \field{Endianness}={}\allowbreak\hex{01}, \field{HeaderSize}, \field{Version}; (2) generate UUIDv4 in RFC~9562 binary layout; (3) compute \field{PrevHash} with the selected \field{HashAlgo} (zero when encrypted); (4) set reserved fields to zero; (5) pad8 all variable fields; (6) never modify written blocks; (7) set \field{CapBitmap} accurately; (8) if importing: set \field{Flags} bit~0, emit Import Provenance as Block~0; (9) set \field{PayloadVersion} to~1; (10) set \field{CompAlgo} bits to 00 when uncompressed; (11) split regions exceeding $2^{32}{-}81$ bytes; (12) write 32 zero bytes for unavailable \field{DiskHash}; (13) reject \field{PageSizeLog2} outside $[10,40]$; (14) emit well-formed UTF-8 per RFC~3629 for all string fields; (15) convert port numbers from network byte order to little-endian before writing; (16) set the header \field{BlockCount} to the number of capture-segment blocks including EoC, or to zero when unknown at header-write time, and never patch it afterwards; record the exact count in the EoC \field{BlockCount} field.
 
 A conformant acquirer \MUST{} emit Process Identity as Block~0 and Module List Index as Block~1.
 
@@ -1326,13 +1656,18 @@ A conformant acquirer \MUST{} emit Process Identity as Block~0 and Module List I
 
 \noindent\textbf{Compression:} (28) when \field{Compressed} is set, write 8-byte \field{UncompressedSize} before compressed data; (29) set \field{BlockLength} to on-disk size.
 
-\noindent\textbf{Block types:} (30) \MUSTNOT{} emit block types whose payload format is not yet specified in this document.
-\noindent\textbf{Hash algorithm:} (31) set \field{HashAlgo} to a registered code from Table~\ref{tab:hashalgos}; the default (\hex{00}, BLAKE3) \SHOULD{} be used unless FIPS compliance, organizational policy, or platform performance measurements indicate otherwise; (32) use the selected algorithm exclusively for all \field{PrevHash}, \field{FileHash}, and \field{DiskHash} computations within the file; \MUSTNOT{} mix algorithms within a single file.
+\noindent\textbf{Block types:} (30) \MUSTNOT{} emit block types whose payload format is not yet specified in this document, except producer-defined Structural types inside extension segments (Section~\ref{sec:extsegments}).
+
+\noindent\textbf{Hash algorithm:} (31) set \field{HashAlgo} to a registered code from Table~\ref{tab:hashalgos}; the default (\hex{00}, BLAKE3) \SHOULD{} be used unless FIPS compliance, organizational policy, or platform performance measurements indicate otherwise; (32) use the selected algorithm exclusively for all \field{PrevHash}, \field{FileHash}, \field{SegmentHash}, and \field{DiskHash} computations within the file; \MUSTNOT{} mix algorithms within a single file.
+
+\noindent\textbf{Extension segments:} (33) when appending, \MUSTNOT{} modify any byte of the header, the capture segment, or an existing extension segment; (34) terminate every extension segment with an End-of-Extension block carrying the exact \field{SegmentHash} and \field{BlockCount}; (35) continue the \field{PrevHash} chain from the last block already in the file (zero when encrypted); (36) emit only the block types Section~\ref{sec:extsegments} permits in extension segments; (37) in encrypted containers, write extension segments inside the AEAD stream before the tag and never append after the tag.
+
+\noindent\textbf{Thread Context:} a producer that captures thread register state \SHOULD{} emit one Thread Context block (\hex{0011}) per thread, set the \field{Current} flag on exactly one of them, set \field{CapBitmap} bit~2, and include at least the program-counter and stack-pointer registers (Section~\ref{sec:threadctx}). (38) Thread Context blocks \MUST{} be written in the capture segment and \SHOULD{} precede the first Memory Region; (39) set \field{Suspended} only for registers read from a stopped thread and \field{Partial} whenever the register file is incomplete.
 
 \noindent A producer \SHOULD{} emit an EoC block. \field{FileHash} \SHOULD{} be computed over plaintext even when encrypted. When encrypted, the producer \SHOULD{} record an external file hash for chain-of-custody.
 
 \subsection{Consumer}
-A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness}$\neq$\hex{01}; (2) use \field{HeaderSize} to locate blocks; (3) skip unknown types via \field{BlockLength}; (4) reject $\field{BlockLength} < 80$; (5) detect end-of-blocks; (6) ignore reserved fields; (7) reject type \hex{0000}; (8) skip unrecognized \field{PayloadVersion} for known block types with a logged warning indicating which block types were affected; (9) treat all-zero \field{DiskHash} as unavailable; (10) reject \field{PageSizeLog2} outside $[10,40]$; (11) use explicit length fields to determine string extent, not NUL-scanning beyond the declared length; (12) preserve raw bytes for malformed UTF-8 fields and not reject the entire block; (13) if \field{BlockCount}$>$0, verify parsed count matches; (14) treat bytes after a verified EoC as trailing non-MSL data.
+A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness} $\neq$ \hex{01}; (2) use \field{HeaderSize} to locate blocks; (3) skip unknown types via \field{BlockLength}; (4) reject $\field{BlockLength} < 80$; (5) detect end-of-blocks; (6) ignore reserved fields; (7) reject type \hex{0000}; (8) skip unrecognized \field{PayloadVersion} for known block types with a logged warning indicating which block types were affected; (9) treat all-zero \field{DiskHash} as unavailable; (10) reject \field{PageSizeLog2} outside $[10,40]$; (11) use explicit length fields to determine string extent, not NUL-scanning beyond the declared length; (12) preserve raw bytes for malformed UTF-8 fields and not reject the entire block; (13) verify that every non-zero block count---header \field{BlockCount} and EoC \field{BlockCount}---equals the number of capture-segment blocks parsed including the EoC block, and otherwise report the file as truncated or corrupt; accept a 40-byte EoC payload as count unknown; (14) after a verified EoC block (and, when encrypted, the AEAD tag), attempt to parse extension segments per Section~\ref{sec:extsegments} and treat everything after the last verified segment as trailing non-MSL data.
 
 \noindent\textbf{Encryption:} (15) verify \field{HeaderSize}=128; read KEM ct; decrypt via AEAD with AAD; reject on failure; (16) skip \field{PrevHash} verification.
 
@@ -1341,9 +1676,31 @@ A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness}$\neq
 \noindent\textbf{Compression:} (19) read 8-byte \field{UncompressedSize} before inflating; (20) reject if decompressed size does not match \field{UncompressedSize}.
 
 \noindent\textbf{Cross-references:} (21) log and continue on dangling \field{ParentUUID} or payload-embedded UUID references; treat the affected block as an orphan but \MUSTNOT{} discard it.
-\noindent\textbf{Hash algorithm:} (22) \MUST{} implement at minimum \field{HashAlgo}=\hex{00} (BLAKE3) and \field{HashAlgo}=\hex{01} (SHA-256); \MAY{} implement \hex{02} (SHA-512/256) and other registered codes; \MUST{} reject files whose \field{HashAlgo} the consumer does not implement, emitting a diagnostic indicating the unsupported algorithm code.
 
-\noindent A consumer \SHOULD: verify \blake{} chain when unencrypted; verify EoC \field{FileHash} after decryption.
+\noindent\textbf{Hash algorithm:} (22) \MUST{} implement at minimum \field{HashAlgo}={}\allowbreak\hex{00} (BLAKE3) and \field{HashAlgo}={}\allowbreak\hex{01} (SHA-256); \MAY{} implement \hex{02} (SHA-512/256) and other registered codes; \MUST{} reject files whose \field{HashAlgo} the consumer does not implement, emitting a diagnostic indicating the unsupported algorithm code.
+
+\noindent\textbf{Extension segments:} (23) verify chain continuity from the EoC block (unencrypted files), \field{SegmentHash}, and \field{BlockCount} of every extension segment, and \MUSTNOT{} present an unterminated or failing segment as verified; (24) accept Structural and producer-defined block types in verified segments, skipping unrecognized payloads via \field{BlockLength}; (25) honour the last VAS Map in file order (Section~\ref{sec:vasmap}) and merge Module Build-ID Manifest rows by \field{BaseAddr} (Section~\ref{sec:buildid}).
+
+\noindent\textbf{Page states:} (26) decode \field{PageStateMap} value \texttt{11} as NotResident (a zero-content page, Section~\ref{sec:threestate}), never as a read failure.
+
+\noindent A consumer \SHOULD: verify the \field{PrevHash} chain when unencrypted; verify EoC \field{FileHash} after decryption.
+
+%% ======================================================================
+\section{Revision History}\label{sec:revhistory}
+%% ======================================================================
+\noindent\textbf{1.1.0 --- 2026-10-23.} Minor revision; 1.0.0 files remain valid, consumers \MUST{} accept any minor of major~1 (Section~\ref{sec:versioncompat}).
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+\item \textbf{End-of-Capture \field{BlockCount}} (Section~\ref{sec:eoc}): the EoC payload now carries the exact capture-segment block count at \texttt{+0x28}; the header \field{BlockCount} is never patched after writing (Section~\ref{sec:basehdr}). A 40-byte legacy EoC payload remains accepted.
+\item \textbf{Extension segments} (Section~\ref{sec:extsegments}): blocks appended after the EoC block are grouped into segments terminated by a new End-of-Extension block (\hex{0FFE}) with \field{SegmentHash}, \field{WrittenAt}, \field{BlockCount}, and \field{Producer}; the \field{PrevHash} chain continues across the EoC block. Evidence block types are forbidden in segments; producer-defined Structural payloads (e.g., Pointer Graph \hex{1003}) are permitted only there. Bytes after the last verified segment are trailing data.
+\item \textbf{VAS Map} (\hex{1001}, Section~\ref{sec:vasmap}): payload defined (\field{Count}/\field{EntrySize} preamble, 24-byte entry head, \field{NameSource} at entry offset \texttt{+0x14}); one entry per enumerated range; the last map in file order supersedes.
+\item \textbf{Page state NotResident} (\texttt{11}, Section~\ref{sec:threestate}): the former reserved value now denotes a mapped, never-touched page with zero content; Section~\ref{sec:threestate} renamed to ``Page State Map''; design principle~2 reads ``four-state''.
+\item \textbf{New capture-time blocks}: Physical Memory Map (\hex{0059}, Section~\ref{sec:physmap}, not yet emitted by any known producer), Module Build-ID Manifest (\hex{005A}, Section~\ref{sec:buildid}), Region Omission Manifest (\hex{005B}, Section~\ref{sec:omission}); Connectivity Table (\hex{0054}, Section~\ref{sec:block:connectivity-table}) with \field{TableBitmap} bit~3 (Table~\ref{tab:sysctx-bitmap}).
+\item \textbf{\field{HashAlgo}} (header offset \hex{3D}, Section~\ref{sec:hashchain}, Table~\ref{tab:hashalgos}): integrity hash selector (BLAKE3 default, SHA-256, SHA-512/256); producer rules 31--32 and consumer rule~22. Previously present only in the LaTeX edition.
+\item \textbf{Thread Context} (\hex{0011}, Section~\ref{sec:threadctx}, Tables~\ref{tab:threadctx}/\ref{tab:threadreg}): per-thread register files contributed by Ricardo J. Rodr\'{\i}guez (PR~\#1), with \field{Arch} at \texttt{+0x13}, \field{Suspended}/\field{Partial} flags, thread states \hex{05}--\hex{07}, and register flags for thread pointer and link register.
+\item Markdown and LaTeX editions synchronized: paper title, \field{HashAlgo}, Connectivity Table renumbered from \hex{0055} to \hex{0054}.
+\end{itemize}
+
+\noindent\textbf{1.0.0 --- 2026-07.} Initial working draft.
 
 \clearpage
 \begin{thebibliography}{9}

@@ -2,15 +2,17 @@
 
 **A self-describing, block-based binary format for process-centric memory forensics.**
 
-Memory Slice captures the complete forensic state of a single operating system process: the virtual address space with per-page acquisition status (Captured / Failed / Unmapped) and transient OS metadata that exists only while the process is alive -- threads, file descriptors, loaded modules, network connections, and more.
+Memory Slice captures the complete forensic state of a single operating system process: the virtual address space with per-page acquisition status (Captured / Failed / Unmapped / NotResident) and transient OS metadata that exists only while the process is alive -- threads, file descriptors, loaded modules, network connections, and more.
 
 ## Key Properties
 
-- **Append-only integrity** -- BLAKE3 hash chain from file header through every block
-- **Three-state page map** -- distinguishes successfully read pages from failed reads and TOCTOU unmaps
+- **Append-only integrity** -- hash chain (BLAKE3 by default, selectable `HashAlgo`) from file header through every block, including appended extension segments
+- **Four-state page map** -- distinguishes successfully read pages from failed reads, TOCTOU unmaps, and never-touched (zero) pages
 - **Self-describing** -- endianness, version, OS, architecture, PID, and capability bitmap in the header
 - **Dual-layer OS abstraction** -- normalized cross-platform fields plus OS-native opaque blobs
 - **Enrichable** -- analysis tools append Structural and Semantic blocks without modifying capture data
+- **Extension segments** -- post-acquisition blocks are grouped into self-verifying segments terminated by an End-of-Extension block (`0x0FFE`); the capture segment and header stay byte-for-byte untouched
+- **Thread Context** -- per-thread register files (`0x0011`) for emulation and stack attribution
 - **Import-friendly** -- raw dumps (`/proc/pid/mem`, ELF cores, Minidumps, ProcDump) convert to MSL with full provenance tracking
 
 ## Specification
@@ -20,7 +22,7 @@ Memory Slice captures the complete forensic state of a single operating system p
 | Markdown | [Memory_Slice_Specification.md](Memory_Slice_Specification.md) |
 | PDF | [Memory_Slice_Specification.pdf](Memory_Slice_Specification.pdf) |
 
-**Version:** draft-2026-07 (Working Draft)
+**Version:** 1.1.0 (Working Draft)
 
 ## Building the PDF
 

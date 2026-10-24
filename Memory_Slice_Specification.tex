@@ -96,7 +96,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small\color{muted}Memory Slice (.msl) Format Specification}
-\fancyhead[R]{\small\color{muted}Version 1.1.0}
+\fancyhead[R]{\small\color{muted}Version 1.1.1}
 \fancyfoot[C]{\small\color{muted}\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -138,10 +138,10 @@
 {\LARGE\bfseries\color{accent} Binary Format Specification\par}\vspace{0.5cm}
 {\color{muted!50}\rule{\textwidth}{0.5pt}}\vspace{1cm}
 {\large\color{muted}
-Version: 1.1.0\\[4pt]
+Version: 1.1.1\\[4pt]
 Status: Working Draft\\[4pt]
 Editor(s): Daniel Baier\\[4pt]
-This version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/releases/tag/v1.1.0}}\\[4pt]
+This version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/releases/tag/v1.1.1}}\\[4pt]
 Latest version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/}}
 }\vspace{1.5cm}
 \begin{abstract}\noindent
@@ -358,7 +358,7 @@ External hash & Complete file substitution, transport corruption & Only as trust
 \noindent\textbf{Size:} $8{+}1{+}1{+}2{+}4{+}8{+}16{+}8{+}2{+}2{+}4{+}1{+}4{+}1{+}2=64$.
 
 \begin{notebox}[title={BlockCount semantics}]
-\field{BlockCount} counts the blocks of the capture segment, including the End-of-Capture block; blocks in extension segments (Section~\ref{sec:extsegments}) are never counted. A producer that does not know the count when it writes the header (streaming acquisition) \MUST{} write \hex{00000000} and \MUSTNOT{} patch the field afterwards: the header is covered by Block~0's \field{PrevHash} and by the EoC \field{FileHash}, so a later modification would invalidate both. Such a producer \SHOULD{} record the exact count in the EoC block's \field{BlockCount} field instead (Table~\ref{tab:eoc}). Encrypted containers \MAY{} leave the header field zero and rely on the (encrypted) EoC count. Every non-zero count---header or EoC---\MUST{} equal the number of capture-segment blocks actually parsed, including the EoC block; otherwise the file \MUST{} be considered truncated or corrupt (consumer rule~13, Section~\ref{sec:conformance}).
+\field{BlockCount} counts the blocks of the capture segment, including the End-of-Capture block; blocks in extension segments (Section~\ref{sec:extsegments}) are never counted. A producer that does not know the count when it writes the header (streaming acquisition) \MUST{} write \hex{00000000} and \MUSTNOT{} patch the field afterwards: the header is covered by Block~0's \field{PrevHash} and by the EoC \field{FileHash}, so a later modification (except the one-time \field{CipherLen} patch, Section~\ref{sec:streamenc}) would invalidate both. Such a producer \SHOULD{} record the exact count in the EoC block's \field{BlockCount} field instead (Table~\ref{tab:eoc}). Encrypted containers \MAY{} leave the header field zero and rely on the (encrypted) EoC count. Every non-zero count---header or EoC---\MUST{} equal the number of capture-segment blocks actually parsed, including the EoC block; otherwise the file \MUST{} be considered truncated or corrupt (consumer rule~13, Section~\ref{sec:conformance}).
 \end{notebox}
 
 \begin{table}[H]\centering\caption{File header flags (\field{Flags}, 32~bits at offset~\hex{0C}).}\label{tab:hdrflags}\small
@@ -388,7 +388,7 @@ When \field{Encrypted} is set, \field{HeaderSize} \MUST{} be~128. Bytes \hex{00}
 0x4E & 2  & \field{KEMCtLen} & KCL & KEM ciphertext length. 0 when \field{KeyEncap}=\hex{00}. \\
 0x50 & 24 & \field{Nonce}    & --- & AEAD nonce. AES-256-GCM: 12B used, rest zero. XChaCha20-Poly1305: all 24B. \\
 0x68 & 16 & \field{KDFSalt}  & --- & KDF salt. Zeros if N/A. \\
-0x78 & 8  & \field{Reserved3}& Rsv & Zero. \\
+0x78 & 8  & \field{CipherLen}& CL & Byte length of the primary AEAD ciphertext (Block~0 through EoC plus in-stream extension segments). 0 = not recorded. Excluded from the AAD (Section~\ref{sec:enclayout}). \\
 \bottomrule\end{tabular}\end{table}
 
 \noindent\textbf{Size:} $1{+}1{+}1{+}1{+}4{+}4{+}1{+}1{+}2{+}24{+}16{+}8 = 64$. Total header: $64{+}64=128$.
@@ -422,7 +422,7 @@ When \field{Encrypted} is set, \field{HeaderSize} \MUST{} be~128. Bytes \hex{00}
 \node[fld, text width=0.6cm, fill=fldCrypto, draw=fldCryptoB, right=0pt of r3] (kcl) {\textbf{KCL}\\2};
 \node[fld, text width=2.8cm, fill=fldCrypto, draw=fldCryptoB, right=0pt of kcl] (nonce) {\textbf{Nonce}\\24\,B};
 \node[fld, text width=2.0cm, fill=fldCrypto, draw=fldCryptoB, right=0pt of nonce] (salt) {\textbf{KDFSalt}\\16\,B};
-\node[fld, text width=1.0cm, fill=colReserved, draw=colReservedB, right=0pt of salt] (r4) {\textbf{Rsv}\\8};
+\node[fld, text width=1.0cm, fill=fldCrypto, draw=fldCryptoB, right=0pt of salt] (r4) {\textbf{CL}\\8};
 \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=4pt}, thick, color=accent] (ea.south west)--(r4.south east) node[midway, below=10pt, font=\footnotesize\bfseries\color{accent}] {Encryption extension (64\,B) --- present only when \field{Encrypted} set};
 \node[lbl, above=1pt of magic.north west, anchor=south west] {\hex{00}};
 \node[lbl, above=1pt of ea.north west, anchor=south west] {\hex{40}};
@@ -435,7 +435,7 @@ When \field{Encrypted} is set, \field{HeaderSize} \MUST{} be~128. Bytes \hex{00}
 All multi-byte structural integers are little-endian (\field{Endianness}=\hex{01}). Memory content within \field{PageData} is stored in the target architecture's native order. See Section~\ref{sec:byteorder} for the complete byte-order domain summary.
 
 \subsection{Version Compatibility}\label{sec:versioncompat}
-Unknown major version: \SHOULD{} reject. Unknown minor of a known major: \MUST{} parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via \field{BlockLength}, reserved fields ignored). Files that use any feature introduced in version~1.1 (extension segments, EoC \field{BlockCount}, \field{HashAlgo}, Thread Context, VAS Map \field{NameSource}, blocks \hex{0054} and \hex{0059}--\hex{005B}, page state NotResident) \SHOULD{} set \field{Version} to \hex{0101}; files written as \hex{0100} remain valid. Always use \field{HeaderSize} to locate Block~0.
+Unknown major version: \SHOULD{} reject. Unknown minor of a known major: \MUST{} parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via \field{BlockLength}, reserved fields ignored). Files that use any feature introduced in version~1.1 (extension segments, EoC \field{BlockCount}, \field{HashAlgo}, Thread Context, VAS Map \field{NameSource}, blocks \hex{0054} and \hex{0059}--\hex{005B}, page state NotResident) \SHOULD{} set \field{Version} to \hex{0101}; files written as \hex{0100} remain valid. Patch revisions (e.g., 1.1.1) do not change \field{Version}, which stays \hex{0101} (there is no patch byte); they correct errata and define semantics for reserved fields whose zero value preserves the prior meaning. A 1.1.0 consumer computes the AAD over the unzeroed header and therefore cannot decrypt files with \field{CipherLen}$\neq$0 (Section~\ref{sec:enclayout}); files with \field{CipherLen}=0 are unaffected. A consumer whose tag verification fails on such a file \SHOULD{} report that it may require 1.1.1 support rather than tampering (Section~\ref{sec:enclayout}). Always use \field{HeaderSize} to locate Block~0.
 
 \begin{table}[H]\centering\caption{Target platform codes: (a) OS and (b) CPU.}\label{tab:platformcodes}\small
 \begin{minipage}[t]{0.47\textwidth}\centering
@@ -595,7 +595,7 @@ Let $H(\cdot)$ denote the selected algorithm. Then:
 Completeness marker. An acquirer \SHOULD{} emit it as the final block of the capture segment. A verified EoC block \MAY{} be followed by extension segments (Section~\ref{sec:extsegments}); bytes after the last verified segment are non-MSL trailing data.
 \begin{table}[H]\centering\caption{End-of-Capture payload (48 bytes).}\label{tab:eoc}\small
 \begin{tabular}{M M l p{6.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Description}\\\midrule
-+0x00 & 32 & \field{FileHash} & $H$ (\field{HashAlgo}) of all bytes from offset~0 through the last byte before this EoC block. Populated even when encrypted (computed over plaintext). \\
++0x00 & 32 & \field{FileHash} & $H$ (\field{HashAlgo}) of all bytes from offset~0 through the last byte before this EoC block. Populated even when encrypted (computed over plaintext). Bytes \hex{78}--\hex{7F} (\field{CipherLen}) are hashed as zero (Section~\ref{sec:streamenc}). \\
 +0x20 & 8 & \field{AcqEnd} & Acquisition end time (UTC, ns since epoch). \\
 +0x28 & 4 & \field{BlockCount} & Number of capture-segment blocks including this EoC block. 0~=~unknown. A producer \SHOULD{} record the exact count here; it is always known when the EoC block is written (Section~\ref{sec:basehdr}, \emph{BlockCount semantics}). \\
 +0x2C & 4 & \field{Reserved} & Zero. \\\bottomrule
@@ -633,7 +633,7 @@ An MSL file consists of the file header, exactly one \textbf{capture segment}, a
 \node[font=\tiny\color{accent}] at ($(eox1.north)!0.5!(en.north)+(0,0.75)$) {PrevHash = $H$(EoX)};
 \draw[decorate, decoration={brace, amplitude=3pt, raise=3pt}, thick, color=btEoXB] (e1.north west)--(d2.east|-e1.north) node[midway, above=6pt, font=\tiny\color{btEoXB}] {SegmentHash};
 \end{tikzpicture}}
-\caption{File layout with extension segments. Each segment is a run of blocks closed by an End-of-Extension (EoX) block whose \field{SegmentHash} covers the segment's preceding bytes; the \field{PrevHash} chain runs unbroken from the file header through every segment. In encrypted containers the AEAD tag follows the last segment (Section~\ref{sec:enclayout}).}
+\caption{File layout with extension segments. Each segment is a run of blocks closed by an End-of-Extension (EoX) block whose \field{SegmentHash} covers the segment's preceding bytes; the \field{PrevHash} chain runs unbroken from the file header through every segment. In encrypted containers the segments lie inside the AEAD ciphertext and the tag follows the last segment (Section~\ref{sec:enclayout}); sealed extension segments (Section~\ref{sec:sealedseg}) may follow the tag.}
 \label{fig:ext-layout}
 \end{figure}
 
@@ -667,9 +667,9 @@ An MSL file consists of the file header, exactly one \textbf{capture segment}, a
 
 \noindent\textbf{Permitted block types.} Extension segments carry derived or supplementary data, never evidence. The following types \MUSTNOT{} appear in an extension segment: Memory Region (\hex{0001}), Module Entry (\hex{0002}), \hex{0010}--\hex{0015}, Import Provenance (\hex{0030}), Process Identity (\hex{0040}), \hex{0050}--\hex{0058}, and End-of-Capture (\hex{0FFF}). Permitted types are Key Hint (\hex{0020}), Related Dump (\hex{0041}), \hex{0059}--\hex{005B} (Sections~\ref{sec:physmap}--\ref{sec:omission}), and the Structural namespace (\hex{1000}--\hex{1FFF}). Block types whose payload this specification does not define (e.g., Pointer Graph \hex{1003}, producer-defined Structural types) \MAY{} appear only in extension segments. Blocks in an extension segment \MAY{} reference blocks in the capture segment or in earlier segments by \field{ParentUUID} or payload-embedded UUID (Section~\ref{sec:crossref}).
 
-\noindent\textbf{Producer rules.} A producer appending an extension segment \MUSTNOT{} modify any byte of the header, the capture segment, or an existing segment; \MUST{} terminate every segment it writes with an End-of-Extension block; \MUST{} continue the \field{PrevHash} chain from the last block already in the file (zero when encrypted); and \MUST{} write the exact \field{BlockCount} and \field{SegmentHash}. A producer that finds trailing data after the last verified segment \SHOULD{} refuse to append rather than build on unverified bytes. In an encrypted container, extension segments \MUST{} lie inside the AEAD ciphertext, i.e., be written before the AEAD is finalized; nothing can be appended to a sealed container because the tag at EOF authenticates the whole stream (Section~\ref{sec:enclayout}).
+\noindent\textbf{Producer rules.} A producer appending an extension segment \MUSTNOT{} modify any byte of the header, the capture segment, or an existing segment; \MUST{} terminate every segment it writes with an End-of-Extension block; \MUST{} continue the \field{PrevHash} chain from the last block already in the file (zero when encrypted); and \MUST{} write the exact \field{BlockCount} and \field{SegmentHash}. A producer that finds trailing data after the last verified segment \SHOULD{} refuse to append rather than build on unverified bytes. In an encrypted container, extension segments written before sealing \MUST{} lie inside the primary AEAD ciphertext, i.e., be written before the AEAD is finalized; after sealing, a producer \MUST{} append only sealed extension segments (Section~\ref{sec:sealedseg}).
 
-\noindent\textbf{Consumer rules.} After parsing and verifying the EoC block (and, when encrypted, the AEAD tag), a consumer \MUST{} attempt to parse extension segments: read blocks until an End-of-Extension block, then verify (a)~chain continuity from the preceding block (unencrypted files), (b)~\field{SegmentHash}, and (c)~\field{BlockCount}. Only a segment that passes all three checks is a \emph{verified segment}; its blocks \MAY{} then be presented alongside the capture. A segment that fails verification or is not terminated---EOF, non-magic bytes, or a block that fails framing before an End-of-Extension block is found---\MUSTNOT{} be presented as verified, and everything from its first byte to EOF is trailing data. Consumers that do not implement extension segments \MUST{} treat everything after the EoC block as trailing data (consumer rule~14, Section~\ref{sec:conformance}).
+\noindent\textbf{Consumer rules.} After parsing and verifying the EoC block (and, when encrypted, the AEAD tag), a consumer \MUST{} attempt to parse extension segments: read blocks until an End-of-Extension block, then verify (a)~chain continuity from the preceding block (unencrypted files), (b)~\field{SegmentHash}, and (c)~\field{BlockCount}. Only a segment that passes all three checks is a \emph{verified segment}; its blocks \MAY{} then be presented alongside the capture. A segment that fails verification or is not terminated---EOF, non-magic bytes, or a block that fails framing before an End-of-Extension block is found---\MUSTNOT{} be presented as verified, and everything from its first byte to EOF is trailing data. Consumers that do not implement extension segments \MUST{} treat everything after the EoC block as trailing data (consumer rule~14, Section~\ref{sec:conformance}). In an encrypted container, bytes after the primary AEAD tag are parsed as sealed extension segments (Section~\ref{sec:sealedseg}) before the remainder is treated as trailing data.
 
 \vspace{0.5em}\noindent\rule{\textwidth}{0.3pt}\vspace{0.5em}
 \noindent\textit{The next sections specify payload contents: per-process payloads (Section~\ref{sec:payloads}), investigation-mode payloads (Section~\ref{sec:investigation}), and the four-state page model (Section~\ref{sec:threestate}).}
@@ -922,7 +922,19 @@ $+n$ & var & \field{Registers} & --- & \field{RegCount} register entries (Table~
 $+m$ & var & \field{Value} & --- & \field{Width} bytes. Integer registers in the file's byte order (\field{Endianness}, Section~\ref{sec:encoding}); vector registers in the target's native lane order. Pad to 8B. \\\bottomrule
 \end{tabular}\end{table}
 
-Register names \MUST{} be the lowercase canonical mnemonic for the target architecture (e.g.\ \texttt{rax}, \texttt{rip}, \texttt{rsp}, \texttt{rflags} on x86\_64; \texttt{x0}--\texttt{x30}, \texttt{sp}, \texttt{pc}, \texttt{pstate} on ARM64). A producer that emits a Thread Context block \MUST{} include at least the program-counter and stack-pointer registers, and \SHOULD{} set the program-counter, stack-pointer, frame-pointer, and flags bits in \field{Flags} on the corresponding entries so that consumers can locate them without architecture-specific knowledge. Consumers \MUST{} preserve registers whose names they do not recognize and skip each entry via its declared \field{NameLen}/\field{Width} extents.
+Register names \MUST{} be the lowercase canonical mnemonics of Table~\ref{tab:regnames} for the architectures it lists. A producer that emits a Thread Context block \MUST{} include at least the program-counter and stack-pointer registers, and \SHOULD{} set the program-counter, stack-pointer, frame-pointer, and flags bits in \field{Flags} on the corresponding entries so that consumers can locate them without architecture-specific knowledge. Consumers \MUST{} preserve registers whose names they do not recognize and skip each entry via its declared \field{NameLen}/\field{Width} extents.
+
+\noindent\textbf{Canonical register names.} For the architectures listed in Table~\ref{tab:regnames}, register names \MUST{} be the names given there. Aliases \MUSTNOT{} be written (ARM64 \texttt{fp}/\texttt{lr}; ARM32 \texttt{r13}--\texttt{r15}); consumers \SHOULD{} normalise \texttt{fp}$\to$\texttt{x29} and \texttt{lr}$\to$\texttt{x30} in files from 1.1.0 producers. Registers not listed use the lowercase mnemonic of the architecture manual (e.g., \texttt{nzcv}, \texttt{v0}--\texttt{v31}, \texttt{xmm0}--\texttt{xmm15}). Listed integer registers, including flags and segment registers, use the GPR width, zero-extended. On x86\_64, producers \MAY{} write both \texttt{fs\_base} and \texttt{gs\_base}; the TLS flag (bit~4) is set only on the one the OS uses as thread pointer. Segment selectors (\texttt{fs}, \texttt{gs}) never carry the TLS flag; on x86 the TLS flag is set only if the producer records the segment base under a name not listed in Table~\ref{tab:regnames} (e.g., \texttt{gs\_base}).
+
+\begin{table}[H]\centering\caption{Canonical register mnemonics.}\label{tab:regnames}\small
+\begin{tabularx}{\textwidth}{l X}\toprule\textbf{Arch}&\textbf{Names (role)}\\\midrule
+x86\_64 & \texttt{rax}, \texttt{rbx}, \texttt{rcx}, \texttt{rdx}, \texttt{rsi}, \texttt{rdi}, \texttt{rbp} (FP), \texttt{rsp} (SP), \texttt{r8}--\texttt{r15}, \texttt{rip} (PC), \texttt{rflags} (FLAGS), \texttt{cs}, \texttt{ss}, \texttt{ds}, \texttt{es}, \texttt{fs}, \texttt{gs}, \texttt{fs\_base}/\texttt{gs\_base} (TLS: the one the OS uses as thread pointer, \texttt{fs\_base} on Linux/Android/FreeBSD, \texttt{gs\_base} on Windows/macOS); optional \texttt{orig\_rax}. \\
+x86 & \texttt{eax}, \texttt{ebx}, \texttt{ecx}, \texttt{edx}, \texttt{esi}, \texttt{edi}, \texttt{ebp} (FP), \texttt{esp} (SP), \texttt{eip} (PC), \texttt{eflags} (FLAGS), \texttt{cs}, \texttt{ss}, \texttt{ds}, \texttt{es}, \texttt{fs}, \texttt{gs}. \\
+ARM64 & \texttt{x0}--\texttt{x28}, \texttt{x29} (FP), \texttt{x30} (LR), \texttt{sp} (SP), \texttt{pc} (PC), \texttt{pstate} (FLAGS), \texttt{tpidr\_el0} (TLS on Linux/Android/FreeBSD), \texttt{tpidrro\_el0} (TLS on macOS/iOS), \texttt{x18} (TEB on Windows; TLS flag set on \texttt{x18}). \\
+ARM32 & \texttt{r0}--\texttt{r12}, \texttt{sp} (SP), \texttt{lr} (LR), \texttt{pc} (PC), \texttt{cpsr} (FLAGS), \texttt{tpidruro} (TLS); \texttt{r11} (FP in ARM mode), \texttt{r7} (FP in Thumb mode and on Apple platforms). \\\bottomrule
+\end{tabularx}\end{table}
+
+\noindent\textbf{Importer mapping.} ELF \texttt{NT\_PRSTATUS}: x86\_64 \texttt{user\_regs\_struct} field names map directly, with \texttt{eflags}$\to$\texttt{rflags}; ARM64 \texttt{user\_pt\_regs} maps to \texttt{x0}--\texttt{x30}, \texttt{sp}, \texttt{pc}, \texttt{pstate}; ARM64 \texttt{tpidr\_el0} comes from the \texttt{NT\_ARM\_TLS} note, not \texttt{NT\_PRSTATUS}. Minidump \texttt{CONTEXT\_AMD64}: \texttt{Rax}\ldots\texttt{R15} and \texttt{Rip} map to the lowercase names, \texttt{EFlags}$\to$\texttt{rflags}, and \texttt{SegCs}/\allowbreak\texttt{SegDs}/\allowbreak\texttt{SegEs}/\allowbreak\texttt{SegFs}/\allowbreak\texttt{SegGs}/\allowbreak\texttt{SegSs}$\to$\allowbreak\texttt{cs}/\allowbreak\texttt{ds}/\allowbreak\texttt{es}/\allowbreak\texttt{fs}/\allowbreak\texttt{gs}/\allowbreak\texttt{ss}; it has no \texttt{fs\_base}/\allowbreak\texttt{gs\_base}, so importers \MAY{} write \texttt{gs\_base} from \texttt{MINIDUMP\_THREAD.Teb} with the TLS flag. \texttt{CONTEXT\_ARM64}: \texttt{X0}--\texttt{X28}$\to$\texttt{x0}--\texttt{x28}, \texttt{Fp}$\to$\texttt{x29}, \texttt{Lr}$\to$\texttt{x30}, \texttt{Sp}$\to$\texttt{sp}, \texttt{Pc}$\to$\texttt{pc}, \texttt{Cpsr}$\to$\texttt{pstate}; \texttt{x18} carries the TEB.
 
 A producer \MUST{} set \field{Suspended} only when the thread was stopped while its registers were read (e.g., ptrace-stopped, debugger-halted); registers sampled from a running thread \MUST{} leave the bit clear, since they may not form a consistent snapshot. \field{Partial} \MUST{} be set when the producer could not read every register it would normally record. Consumers \MAY{} use the stack-pointer entries to attribute Memory Regions to threads (stack classification). Importers (Section~\ref{sec:import}) \MAY{} emit Thread Context blocks from source-format thread records, such as ELF core \texttt{NT\_PRSTATUS} notes or Minidump thread lists.
 
@@ -1497,27 +1509,35 @@ Full-container encryption is chosen over per-block encryption to prevent metadat
 \subsection{Encrypted File Layout}\label{sec:enclayout}
 
 \begin{figure}[H]\centering
-\begin{tikzpicture}[region/.style={draw, minimum height=1.4cm, align=center, font=\small, inner sep=5pt},lbl/.style={font=\scriptsize\ttfamily, color=muted},zonelbl/.style={font=\scriptsize\bfseries}]
-\node[region, text width=2.3cm, fill=encClear, draw=encClearB, rounded corners=2pt] (hdr) at (0,0) {\textbf{File Header}\\\scriptsize 128\,B};
-\node[region, text width=1.9cm, fill=encClear!50, draw=encClearB, rounded corners=2pt, right=0.3cm of hdr] (kem) {\textbf{KEM Ct}\\\scriptsize 0--1120\,B};
-\node[region, text width=5.8cm, fill=encCipher, draw=encCipherB, rounded corners=2pt, right=0.3cm of kem, pattern=north east lines, pattern color=encCipherB!20] (cipher) {\textbf{Encrypted Block Stream}\\\scriptsize AEAD ciphertext};
-\node[region, text width=1.7cm, fill=encTag, draw=encTagB, rounded corners=2pt, right=0.3cm of cipher] (tag) {\textbf{Auth Tag}\\\scriptsize 16\,B};
-\node[lbl, below=3pt of hdr.south west, anchor=north west] {0x00}; \node[lbl, below=3pt of hdr.south east, anchor=north] {0x80}; \node[lbl, below=3pt of tag.south east, anchor=north east] {EOF};
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[region/.style={draw, minimum height=1.4cm, align=center, font=\small, inner sep=5pt},lbl/.style={font=\scriptsize\ttfamily, color=muted},zonelbl/.style={font=\scriptsize\bfseries}]
+\node[region, text width=2.0cm, fill=encClear, draw=encClearB, rounded corners=2pt] (hdr) at (0,0) {\textbf{File Header}\\\scriptsize 128\,B};
+\node[region, text width=1.6cm, fill=encClear!50, draw=encClearB, rounded corners=2pt, right=0.3cm of hdr] (kem) {\textbf{KEM Ct}\\\scriptsize 0--1120\,B};
+\node[region, text width=4.0cm, fill=encCipher, draw=encCipherB, rounded corners=2pt, right=0.3cm of kem, pattern=north east lines, pattern color=encCipherB!20] (cipher) {\textbf{Encrypted Block Stream}\\\scriptsize AEAD ciphertext};
+\node[region, text width=1.4cm, fill=encTag, draw=encTagB, rounded corners=2pt, right=0.3cm of cipher] (tag) {\textbf{Auth Tag}\\\scriptsize 16\,B};
+\node[region, text width=1.4cm, fill=encClear, draw=encClearB, rounded corners=2pt, right=0.5cm of tag] (shdr) {\textbf{Seal Hdr}\\\scriptsize 64\,B};
+\node[region, text width=2.0cm, fill=encCipher, draw=encCipherB, rounded corners=2pt, right=0.15cm of shdr, pattern=north east lines, pattern color=encCipherB!20] (scipher) {\textbf{Ciphertext}\\\scriptsize \field{SegCipherLen}};
+\node[region, text width=0.9cm, fill=encTag, draw=encTagB, rounded corners=2pt, right=0.15cm of scipher] (stag) {\textbf{Tag}\\\scriptsize 16\,B};
+\node[region, text width=1.3cm, fill=white, draw=muted, dashed, rounded corners=2pt, right=0.4cm of stag] (trail) {\textbf{trailing}\\\scriptsize data};
+\node[lbl, below=3pt of hdr.south west, anchor=north west] {0x00}; \node[lbl, below=3pt of hdr.south east, anchor=north] {0x80}; \node[lbl, below=3pt of trail.south east, anchor=north east] {EOF};
 \draw[decorate, decoration={brace, amplitude=4pt, raise=6pt}, thick, color=encClearB] (hdr.north west)--(kem.north east) node[midway, above=10pt, zonelbl, color=encClearB] {cleartext (AAD)};
 \draw[decorate, decoration={brace, amplitude=4pt, raise=6pt}, thick, color=encCipherB] (cipher.north west)--(cipher.north east) node[midway, above=10pt, zonelbl, color=encCipherB] {encrypted};
 \node[zonelbl, color=muted, above=10pt of tag.north] {not encrypted};
-\end{tikzpicture}\caption{Encrypted file layout. The AEAD encrypts the block stream; the tag is an output, not itself encrypted.}\label{fig:enc-layout}\end{figure}
+\draw[decorate, decoration={brace, amplitude=4pt, raise=6pt}, thick, color=encTagB] (shdr.north west)--(stag.north east) node[midway, above=10pt, zonelbl, color=encTagB] {sealed segment $1..m$ (optional)};
+\end{tikzpicture}}\caption{Encrypted file layout. The AEAD encrypts the block stream; the tag is an output, not itself encrypted. When \field{CipherLen}$\neq$0, sealed extension segments (Section~\ref{sec:sealedseg}) and then trailing data may follow the tag.}\label{fig:enc-layout}\end{figure}
 
 \begin{enumerate}[leftmargin=1.8em, itemsep=2pt]
-\item \textbf{File header (128\,B, cleartext):} Authenticated as Associated Data (AAD) to the AEAD, along with any KEM ciphertext. Tampering causes decryption failure.
-\item \textbf{KEM ciphertext (0 or variable, cleartext):} Present when \field{KeyEncap}$\neq$\hex{00}. Size is \field{KEMCtLen}. Also in AAD.
-\item \textbf{Encrypted block stream:} AEAD ciphertext of Block~0 through EoC, followed by any extension segments (Section~\ref{sec:extsegments}). The only encrypted region.
-\item \textbf{AEAD authentication tag (16\,B, not encrypted):} Output of the AEAD. Required for decryption. Requires the symmetric key.
+\item \textbf{File header (128\,B, cleartext):} Authenticated as Associated Data (AAD) to the AEAD. The AAD is the file header with bytes \hex{78}--\hex{7F} (\field{CipherLen}) set to zero, followed by any KEM ciphertext. Tampering causes decryption failure.
+\item \textbf{KEM ciphertext (0 or variable, cleartext):} Present when \field{KeyEncap}$\neq$\hex{00}. Size is \field{KEMCtLen}. Also in AAD (item~1).
+\item \textbf{Encrypted block stream:} AEAD ciphertext of Block~0 through EoC, followed by any extension segments (Section~\ref{sec:extsegments}). Its length is \field{CipherLen} when non-zero. The only encrypted region of the primary AEAD.
+\item \textbf{AEAD authentication tag (16\,B, not encrypted):} Output of the AEAD. Required for decryption. Requires the symmetric key. Immediately follows the ciphertext.
+\item \textbf{Sealed extension segments (optional, cleartext header + ciphertext + tag):} Only when \field{CipherLen}$\neq$0 (Section~\ref{sec:sealedseg}).
 \end{enumerate}
 
-\noindent\textbf{Extension segments in encrypted containers.} Extension segments \MUST{} lie inside the AEAD ciphertext, i.e., they are written before the AEAD is finalized, and the tag covers them. Because the tag at EOF authenticates the entire stream, nothing can be appended to a sealed container: producers \MUSTNOT{} write bytes after the tag, and consumers \MUST{} treat any bytes after the tag as trailing non-MSL data. Enriching an already-sealed file requires decrypting it and re-sealing the result with a fresh \field{Nonce}.
+\noindent\textbf{Locating the tag.} When \field{CipherLen}=0 (all 1.1.0 files, and non-seekable streaming producers, Section~\ref{sec:streamenc}), the tag is the final 16 bytes of the file; such a file cannot carry sealed segments or trailing data. When \field{CipherLen}$\neq$0, the ciphertext occupies [\field{HeaderSize}+\field{KEMCtLen}, \field{HeaderSize}+\field{KEMCtLen}+\field{CipherLen}) and the tag immediately follows it; sealed extension segments (Section~\ref{sec:sealedseg}), then trailing data, follow the tag. Consumers \MUST{} reject \field{CipherLen} $>$ file size $-$ \field{HeaderSize} $-$ \field{KEMCtLen} $-$ 16. \field{CipherLen} lies outside the AAD, but changing it moves the tag boundary and thus changes the authenticated ciphertext and the tag bytes; verification then fails except with negligible probability. A consumer that fails tag verification on a file whose bytes \hex{78}--\hex{7F} are non-zero \SHOULD{} report that the file may require 1.1.1 support rather than reporting tampering. For \field{CipherLen}=0 the AAD is byte-identical to the 1.1.0 AAD.
 
-\noindent\textbf{Chain-of-custody without the key.} Producers \SHOULD{} record an external hash of the complete file at acquisition time (\blake{} or SHA-256, offset~0 to EOF). This digest \SHOULD{} be stored in the case evidence log, not in the file.
+\noindent\textbf{Extension segments in encrypted containers.} Extension segments written before sealing \MUST{} lie inside the primary AEAD ciphertext, i.e., they are written before the AEAD is finalized, and the primary tag covers them. Enrichment after sealing appends sealed extension segments (Section~\ref{sec:sealedseg}), each separately authenticated and chained to the preceding tag; it requires the CEK and \field{CipherLen}$\neq$0. Bytes after the primary tag that are not verified sealed segments are trailing non-MSL data.
+
+\noindent\textbf{Chain-of-custody without the key.} Producers \SHOULD{} record an external hash of the complete file at acquisition time (\blake{} or SHA-256, offset~0 to EOF), computed after the \field{CipherLen} patch, i.e., over the final file. This digest \SHOULD{} be stored in the case evidence log, not in the file.
 
 \subsection{Cipher Suites}
 \begin{table}[H]\centering\caption{AEAD cipher suites.}\label{tab:ciphers}\small
@@ -1567,12 +1587,47 @@ When \field{Encrypted} is set:
 \begin{itemize}[leftmargin=1.5em, itemsep=2pt]
 \item \field{PrevHash}: \MUST{} be zero in every block, in the capture segment and in extension segments. AEAD authenticates atomically.
 \item EoC \field{FileHash} and End-of-Extension \field{SegmentHash}: \SHOULD{} be computed over plaintext (enables post-decryption verification).
-\item AAD: File header (128\,B) + any KEM ciphertext.
-\item Extension segments (Section~\ref{sec:extsegments}) are part of the encrypted stream; the chain-continuity check is skipped (all \field{PrevHash} zero) but \field{SegmentHash} and \field{BlockCount} are verified after decryption. No segment \MAY{} be appended after the tag.
+\item AAD: the file header with bytes \hex{78}--\hex{7F} (\field{CipherLen}) set to zero, followed by any KEM ciphertext.
+\item Extension segments (Section~\ref{sec:extsegments}) are part of the encrypted stream; the chain-continuity check is skipped (all \field{PrevHash} zero) but \field{SegmentHash} and \field{BlockCount} are verified after decryption. Segments added after the primary tag are sealed extension segments (Section~\ref{sec:sealedseg}).
 \end{itemize}
 
-\subsection{Streaming Encryption}
-Producers \SHOULD{} encrypt incrementally: (1)~init AEAD with key, nonce, AAD; (2)~for each block, serialize, encrypt, write; (3)~after EoC and any extension segments, finalize AEAD, append 16-byte tag. A parallel hasher (\field{HashAlgo}) computes plaintext \field{FileHash} and \field{SegmentHash} before encryption. $O(1)$ memory.
+\subsection{Streaming Encryption}\label{sec:streamenc}
+Producers \SHOULD{} encrypt incrementally: (1)~write the header with \field{CipherLen}=0 (or its final value, if already known), init AEAD with key, nonce, AAD; (2)~for each block, serialize, encrypt, write; (3)~after EoC and any extension segments, finalize AEAD, append 16-byte tag; (4)~if \field{CipherLen}=0 was written and the output is seekable, patch the 8 bytes at header offset \hex{78} once with the primary ciphertext length. A parallel hasher (\field{HashAlgo}) computes plaintext \field{FileHash} and \field{SegmentHash} before encryption. $O(1)$ memory.
+
+Producers \SHOULD{} record \field{CipherLen}. Producers that know the ciphertext length before encryption begins \MAY{} write the final value directly; otherwise they write 0 and, on seekable output, patch it once after the tag. Non-seekable producers that do not know the length leave it 0. The \field{CipherLen} patch is the only permitted modification of a written header, and only the producer that seals the primary AEAD stream \MAY{} perform it; appenders (Sections~\ref{sec:extsegments} and~\ref{sec:sealedseg}) \MUSTNOT{}, and the header \field{BlockCount} is still never patched (producer rule~16). \field{FileHash} always covers the header with \field{CipherLen} zero (it is computed before any patch, and a directly written value is hashed as zero); consumers verifying \field{FileHash} \MUST{} hash bytes \hex{78}--\hex{7F} as zero.
+
+\subsection{Sealed Extension Segments}\label{sec:sealedseg}
+A sealed extension segment adds one extension segment (Section~\ref{sec:extsegments}) to an encrypted container after the primary AEAD tag has been written. Each sealed segment is a separate AEAD message under a per-segment subkey of the CEK, with its own nonce and tag, chained to the preceding tag. Sealed segments require a non-zero header \field{CipherLen} (Section~\ref{sec:enclayout}).
+
+\begin{lstlisting}
+... | Primary AEAD tag | SealHeader 1 | Ciphertext 1 | Tag 1 | ... | SealHeader m | Ciphertext m | Tag m | [trailing data]
+\end{lstlisting}
+
+\noindent Each \field{SealHeader} is 64 bytes of cleartext (Table~\ref{tab:sealhdr}), followed by \field{SegCipherLen} bytes of ciphertext and a 16-byte tag.
+
+\begin{table}[H]\centering\caption{Sealed segment header (64 bytes).}\label{tab:sealhdr}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
++0x00 & 4  & \field{Magic}       & Mg  & \hex{4D534C53} (\magic{MSLS}). \\
++0x04 & 2  & \field{SealHdrSize} & SHS & 64. \\
++0x06 & 2  & \field{SegIndex}    & SI  & 1-based position of this sealed segment after the primary tag. \\
++0x08 & 8  & \field{SegCipherLen} & SCL & Ciphertext length in bytes. \MUST{} be $>$ 0. \\
++0x10 & 24 & \field{Nonce}       & --- & AEAD nonce, encoded as the header \field{Nonce} for \field{EncAlgo} (Table~\ref{tab:enctable}). \\
++0x28 & 24 & \field{Reserved}    & R   & Zero. \\\bottomrule
+\end{tabular}\end{table}
+
+\noindent\textbf{Size:} $4{+}2{+}2{+}8{+}24{+}24 = 64$.
+
+\noindent\textbf{Cipher suite and key.} The cipher suite is the header \field{EncAlgo}. Segment $i$ is encrypted under $\mathit{SegKey}_i$ = HKDF-\blake{}(IKM=CEK, salt=\field{DumpUUID}, info=\texttt{"MSL-SEG-v1"} $\Vert$ LE16($i$)), the construction of Section~\ref{sec:kem}, where the CEK is the Argon2id output, the external key, or the KEM-derived CEK. \field{SegIndex} therefore ranges from 1 to 65535. \field{Nonce} \MUST{} be generated fresh from a CSPRNG for every segment; the per-segment subkey separates segment keys from the primary stream, and the fresh nonce prevents (key, nonce) reuse if a segment index is written again after a truncation.
+
+\noindent\textbf{Associated data.} $\mathit{AAD}_i$ is the file header with bytes \hex{78}--\hex{7F} (\field{CipherLen}) set to zero, followed by any KEM ciphertext, followed by the 64-byte \field{SealHeader} of segment $i$ and the tag of segment $i{-}1$, where $\mathit{Tag}_0$ is the primary tag. This binds each segment to its position, to the exact bytes it extends, and to this file, so segments cannot be grafted onto a re-sealed copy with the same \field{DumpUUID} and passphrase (against parties without the CEK).
+
+\noindent\textbf{Plaintext.} The plaintext is exactly one extension segment per Section~\ref{sec:extsegments}: \field{PrevHash} \MUST{} be zero, the End-of-Extension block \MUST{} end exactly at \field{SegCipherLen}, the permitted-block-type rules apply, and \field{SegmentHash} and \field{BlockCount} are verified after decryption.
+
+\noindent\textbf{Producer rules.} A producer appending a sealed segment \MUST{} hold the CEK (in KEM mode this requires the recipient's private key, so an acquirer that only holds the public key cannot append); \MUST{} verify the primary tag and every existing sealed segment; \MUST{} refuse when the header \field{CipherLen}=0; \SHOULD{} refuse when trailing data is present; \MUSTNOT{} modify any earlier byte, including the header; and \MUST{} write the whole sealed segment (\field{SealHeader}, ciphertext, tag) as one unit.
+
+\noindent\textbf{Consumer rules.} After the primary tag verifies, a consumer parses sealed segments in order, $i = 1, 2, \ldots$. On any failure---short read, \field{Magic} or \field{SealHdrSize} mismatch, \field{SegIndex}$\neq i$, \field{SegCipherLen} zero or exceeding the bytes remaining after the \field{SealHeader} minus 16, tag failure, or a malformed plaintext segment---everything from that segment's first byte to EOF is trailing data. A consumer \MUSTNOT{} present plaintext from a sealed segment before its tag verifies.
+
+\noindent\textbf{Security considerations.} Dropping trailing sealed segments is undetectable, exactly as for plaintext extension segments (Section~\ref{sec:extsegments}); this is acceptable because evidence block types are forbidden in segments. Sealed segments never alter the capture segment or the primary ciphertext.
 
 %% ======================================================================
 \newpage
@@ -1607,8 +1662,8 @@ $+t$ & var & \field{Note} & UTF-8, pad8. \\\bottomrule
 \item[Step 1:] Read 9 bytes. Verify magic. \field{Endianness} \MUST{} be \hex{01}. Read \field{HeaderSize}.
 \item[Step 2:] If \field{Encrypted}: read extension (\hex{40}--\hex{7F}). If \field{KEMCtLen}$>$0, read KEM ciphertext. Obtain key. Decrypt. Continue with plaintext.
 \item[Step 3:] Read blocks at \field{HeaderSize} (+\field{KEMCtLen} if encrypted) up to the EoC block. Verify \field{BlockLength} $\geq$ 80. Parse or skip via \field{BlockLength}. Verify every non-zero \field{BlockCount} (header, EoC) against the parsed capture-segment count.
-\item[Step 4:] If unencrypted: verify the \field{PrevHash} chain with the algorithm selected by \field{HashAlgo}. If encrypted: verify AEAD tag.
-\item[Step 5:] Verify EoC \field{FileHash} if present. Then parse extension segments (Section~\ref{sec:extsegments}): verify chain continuity, \field{SegmentHash}, and \field{BlockCount} of each; the remainder is trailing data.
+\item[Step 4:] If unencrypted: verify the \field{PrevHash} chain with the algorithm selected by \field{HashAlgo}. If encrypted: locate the AEAD tag at \field{HeaderSize}+\field{KEMCtLen}+\field{CipherLen} (or at EOF$-$16 when \field{CipherLen}=0), rejecting an out-of-bounds \field{CipherLen}, and verify it.
+\item[Step 5:] Verify EoC \field{FileHash} if present. Then parse extension segments (Section~\ref{sec:extsegments}): verify chain continuity, \field{SegmentHash}, and \field{BlockCount} of each. If encrypted and \field{CipherLen}$\neq$0, then parse sealed extension segments after the tag (Section~\ref{sec:sealedseg}). The remainder is trailing data.
 \item[Step 6:] \field{Investigation}? Expect Block~2 = System Context.
 \item[Step 7:] \field{Imported}? Read Import Provenance.
 \end{description}
@@ -1652,7 +1707,7 @@ A conformant acquirer \MUST{} emit Process Identity as Block~0 and Module List I
 
 \noindent\textbf{Investigation:} (17) emit System Context as Block~2; (18) set \field{CapBitmap} bit~11; (19) set \field{TableBitmap}; (20) set \field{Redacted} flag (bit~3) when any field has been intentionally stripped or pseudonymized.
 
-\noindent\textbf{Encryption:} (21) \field{HeaderSize}=128; (22) valid encryption extension; (23) AEAD with header (+KEM ct) as AAD; (24) append 16-byte tag; (25) zero all \field{PrevHash}; (26) \field{Nonce} from CSPRNG; (27) KEM ciphertext after header when \field{KeyEncap}$\neq$\hex{00}.
+\noindent\textbf{Encryption:} (21) \field{HeaderSize}=128; (22) valid encryption extension; (23) AEAD with header (+KEM ct) as AAD, bytes \hex{78}--\hex{7F} zeroed (Section~\ref{sec:enclayout}); (24) append 16-byte tag immediately after the ciphertext, and append after it only sealed extension segments (Section~\ref{sec:sealedseg}); (25) zero all \field{PrevHash}; (26) \field{Nonce} from CSPRNG; (27) KEM ciphertext after header when \field{KeyEncap}$\neq$\hex{00}.
 
 \noindent\textbf{Compression:} (28) when \field{Compressed} is set, write 8-byte \field{UncompressedSize} before compressed data; (29) set \field{BlockLength} to on-disk size.
 
@@ -1660,16 +1715,22 @@ A conformant acquirer \MUST{} emit Process Identity as Block~0 and Module List I
 
 \noindent\textbf{Hash algorithm:} (31) set \field{HashAlgo} to a registered code from Table~\ref{tab:hashalgos}; the default (\hex{00}, BLAKE3) \SHOULD{} be used unless FIPS compliance, organizational policy, or platform performance measurements indicate otherwise; (32) use the selected algorithm exclusively for all \field{PrevHash}, \field{FileHash}, \field{SegmentHash}, and \field{DiskHash} computations within the file; \MUSTNOT{} mix algorithms within a single file.
 
-\noindent\textbf{Extension segments:} (33) when appending, \MUSTNOT{} modify any byte of the header, the capture segment, or an existing extension segment; (34) terminate every extension segment with an End-of-Extension block carrying the exact \field{SegmentHash} and \field{BlockCount}; (35) continue the \field{PrevHash} chain from the last block already in the file (zero when encrypted); (36) emit only the block types Section~\ref{sec:extsegments} permits in extension segments; (37) in encrypted containers, write extension segments inside the AEAD stream before the tag and never append after the tag.
+\noindent\textbf{Extension segments:} (33) when appending, \MUSTNOT{} modify any byte of the header, the capture segment, or an existing extension segment; (34) terminate every extension segment with an End-of-Extension block carrying the exact \field{SegmentHash} and \field{BlockCount}; (35) continue the \field{PrevHash} chain from the last block already in the file (zero when encrypted); (36) emit only the block types Section~\ref{sec:extsegments} permits in extension segments; (37) in encrypted containers, write extension segments inside the AEAD stream before the tag; after the tag, append only sealed extension segments (Section~\ref{sec:sealedseg}).
 
 \noindent\textbf{Thread Context:} a producer that captures thread register state \SHOULD{} emit one Thread Context block (\hex{0011}) per thread, set the \field{Current} flag on exactly one of them, set \field{CapBitmap} bit~2, and include at least the program-counter and stack-pointer registers (Section~\ref{sec:threadctx}). (38) Thread Context blocks \MUST{} be written in the capture segment and \SHOULD{} precede the first Memory Region; (39) set \field{Suspended} only for registers read from a stopped thread and \field{Partial} whenever the register file is incomplete.
+
+\noindent\textbf{Ciphertext length:} (40) write \field{CipherLen} either as its final value or as 0; when 0 is written and the output is seekable, the sealing producer \MAY{} patch it once after the tag (Section~\ref{sec:streamenc}); no other party patches it.
+
+\noindent\textbf{Sealed extension segments:} (41) when appending after the primary tag, write only sealed extension segments per Section~\ref{sec:sealedseg}: hold the CEK, verify the primary tag and every existing sealed segment, refuse when the header \field{CipherLen}=0, use $\mathit{SegKey}_i$ with a fresh CSPRNG \field{Nonce}, write each segment as one unit, and never modify earlier bytes.
+
+\noindent\textbf{Register names:} (42) name Thread Context registers per Table~\ref{tab:regnames} for the architectures it lists, and never write aliases (ARM64 \texttt{fp}/\texttt{lr}; ARM32 \texttt{r13}--\texttt{r15}).
 
 \noindent A producer \SHOULD{} emit an EoC block. \field{FileHash} \SHOULD{} be computed over plaintext even when encrypted. When encrypted, the producer \SHOULD{} record an external file hash for chain-of-custody.
 
 \subsection{Consumer}
-A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness} $\neq$ \hex{01}; (2) use \field{HeaderSize} to locate blocks; (3) skip unknown types via \field{BlockLength}; (4) reject $\field{BlockLength} < 80$; (5) detect end-of-blocks; (6) ignore reserved fields; (7) reject type \hex{0000}; (8) skip unrecognized \field{PayloadVersion} for known block types with a logged warning indicating which block types were affected; (9) treat all-zero \field{DiskHash} as unavailable; (10) reject \field{PageSizeLog2} outside $[10,40]$; (11) use explicit length fields to determine string extent, not NUL-scanning beyond the declared length; (12) preserve raw bytes for malformed UTF-8 fields and not reject the entire block; (13) verify that every non-zero block count---header \field{BlockCount} and EoC \field{BlockCount}---equals the number of capture-segment blocks parsed including the EoC block, and otherwise report the file as truncated or corrupt; accept a 40-byte EoC payload as count unknown; (14) after a verified EoC block (and, when encrypted, the AEAD tag), attempt to parse extension segments per Section~\ref{sec:extsegments} and treat everything after the last verified segment as trailing non-MSL data.
+A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness} $\neq$ \hex{01}; (2) use \field{HeaderSize} to locate blocks; (3) skip unknown types via \field{BlockLength}; (4) reject $\field{BlockLength} < 80$; (5) detect end-of-blocks; (6) ignore reserved fields; (7) reject type \hex{0000}; (8) skip unrecognized \field{PayloadVersion} for known block types with a logged warning indicating which block types were affected; (9) treat all-zero \field{DiskHash} as unavailable; (10) reject \field{PageSizeLog2} outside $[10,40]$; (11) use explicit length fields to determine string extent, not NUL-scanning beyond the declared length; (12) preserve raw bytes for malformed UTF-8 fields and not reject the entire block; (13) verify that every non-zero block count---header \field{BlockCount} and EoC \field{BlockCount}---equals the number of capture-segment blocks parsed including the EoC block, and otherwise report the file as truncated or corrupt; accept a 40-byte EoC payload as count unknown; (14) after a verified EoC block (and, when encrypted, the primary AEAD tag), attempt to parse extension segments per Section~\ref{sec:extsegments} and, when \field{CipherLen}$\neq$0, sealed extension segments per Section~\ref{sec:sealedseg}, and treat everything after the last verified segment as trailing non-MSL data.
 
-\noindent\textbf{Encryption:} (15) verify \field{HeaderSize}=128; read KEM ct; decrypt via AEAD with AAD; reject on failure; (16) skip \field{PrevHash} verification.
+\noindent\textbf{Encryption:} (15) verify \field{HeaderSize}=128; read KEM ct; decrypt via AEAD with AAD (with \field{CipherLen} zeroed, Section~\ref{sec:enclayout}); reject on failure; (16) skip \field{PrevHash} verification.
 
 \noindent\textbf{Investigation:} (17) expect Block~2 = System Context; check \field{TableBitmap}; (18) when \field{Redacted} is set, interpret zero-length optional strings as intentionally redacted rather than absent.
 
@@ -1683,11 +1744,25 @@ A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness} $\ne
 
 \noindent\textbf{Page states:} (26) decode \field{PageStateMap} value \texttt{11} as NotResident (a zero-content page, Section~\ref{sec:threestate}), never as a read failure.
 
+\noindent\textbf{Ciphertext length:} (27) locate the AEAD tag at EOF$-$16 when \field{CipherLen}=0, otherwise at \field{HeaderSize}+\field{KEMCtLen}+\field{CipherLen}; reject \field{CipherLen} $>$ file size $-$ \field{HeaderSize} $-$ \field{KEMCtLen} $-$ 16 (Section~\ref{sec:enclayout}).
+
+\noindent\textbf{Sealed extension segments:} (28) verify sealed segments in order per Section~\ref{sec:sealedseg}; \MUSTNOT{} present plaintext from a sealed segment before its tag verifies; treat everything from the first failing segment to EOF as trailing data.
+
+\noindent\textbf{Register names:} (29) \SHOULD{} normalise ARM64 \texttt{fp}$\to$\texttt{x29} and \texttt{lr}$\to$\texttt{x30} in Thread Context blocks written by 1.1.0 producers.
+
 \noindent A consumer \SHOULD: verify the \field{PrevHash} chain when unencrypted; verify EoC \field{FileHash} after decryption.
 
 %% ======================================================================
 \section{Revision History}\label{sec:revhistory}
 %% ======================================================================
+\noindent\textbf{1.1.1 --- 2026-10-23.} Patch revision; the header \field{Version} remains \hex{0101} (Section~\ref{sec:versioncompat}).
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+\item \textbf{\field{CipherLen}} (header offset \hex{78}, formerly \field{Reserved3}; Sections~\ref{sec:enchdr}, \ref{sec:enclayout}, \ref{sec:streamenc}): byte length of the primary AEAD ciphertext. The AAD is now the file header with bytes \hex{78}--\hex{7F} (\field{CipherLen}) set to zero, followed by any KEM ciphertext; for \field{CipherLen}=0 it is byte-identical to the 1.1.0 AAD. Producers write the final value or 0; a seekable sealing producer that wrote 0 patches it once after the tag, the only permitted header patch. A 1.1.0 consumer cannot decrypt files with \field{CipherLen}$\neq$0; files with \field{CipherLen}=0 are unaffected. Producer rules 23, 24, 40; consumer rule~27.
+\item \textbf{Sealed extension segments} (Section~\ref{sec:sealedseg}, Table~\ref{tab:sealhdr}): an encrypted container can be enriched after sealing by appending AEAD segments under per-segment HKDF-\blake{} subkeys of the CEK, each with a 64-byte \field{SealHeader} (ciphertext length \field{SegCipherLen}, nonce) and its own tag, chained to the preceding tag; requires a non-zero header \field{CipherLen}. Replaces the 1.1.0 rule that nothing may be appended after the tag. Producer rules 37, 41; consumer rules 14, 28.
+\item \textbf{Canonical register mnemonics} (Section~\ref{sec:threadctx}, Table~\ref{tab:regnames}): register names for x86\_64, x86, ARM64 and ARM32 are normative; aliases (\texttt{fp}, \texttt{lr}, \texttt{r13}--\texttt{r15}) are forbidden; consumers normalise \texttt{fp}$\to$\texttt{x29}, \texttt{lr}$\to$\texttt{x30}. Producer rule~42; consumer rule~29.
+\item \textbf{Erratum:} 1.1.0 permitted trailing data after the AEAD tag but gave no means to locate the tag; the tag is now located via \field{CipherLen} (Sections~\ref{sec:enclayout}, \ref{sec:parsing}).
+\end{itemize}
+
 \noindent\textbf{1.1.0 --- 2026-10-23.} Minor revision; 1.0.0 files remain valid, consumers \MUST{} accept any minor of major~1 (Section~\ref{sec:versioncompat}).
 \begin{itemize}[leftmargin=1.5em, itemsep=3pt]
 \item \textbf{End-of-Capture \field{BlockCount}} (Section~\ref{sec:eoc}): the EoC payload now carries the exact capture-segment block count at \texttt{+0x28}; the header \field{BlockCount} is never patched after writing (Section~\ref{sec:basehdr}). A 40-byte legacy EoC payload remains accepted.

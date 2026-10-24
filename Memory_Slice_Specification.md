@@ -1,6 +1,6 @@
 # Memory Slice (.msl) — Binary Format Specification
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Status:** Working Draft
 
 ---
@@ -70,6 +70,7 @@ This specification accompanies the research paper *Memory Slice: A Process-Centr
     - 10.5 Key Derivation
     - 10.6 Interaction with the Integrity Chain
     - 10.7 Streaming Encryption
+    - 10.8 Sealed Extension Segments
 11. **Raw Dump Import**
 12. **Parsing Walkthrough**
 13. **Worked Example**
@@ -234,7 +235,7 @@ The hash chain provides *tamper detection*, not *tamper resistance*. It protects
 
 > **BlockCount semantics**
 >
-> `BlockCount` counts the blocks of the capture segment, including the End-of-Capture block; blocks in extension segments (Section 4.6) are never counted. A producer that does not know the count when it writes the header (streaming acquisition) **MUST** write `0x00000000` and **MUST NOT** patch the field afterwards: the header is covered by Block 0's `PrevHash` and by the EoC `FileHash`, so a later modification would invalidate both. Such a producer **SHOULD** record the exact count in the EoC block's `BlockCount` field instead (Table 12). Encrypted containers **MAY** leave the header field zero and rely on the (encrypted) EoC count. Every non-zero count—header or EoC—**MUST** equal the number of capture-segment blocks actually parsed, including the EoC block; otherwise the file **MUST** be considered truncated or corrupt (consumer rule 13).
+> `BlockCount` counts the blocks of the capture segment, including the End-of-Capture block; blocks in extension segments (Section 4.6) are never counted. A producer that does not know the count when it writes the header (streaming acquisition) **MUST** write `0x00000000` and **MUST NOT** patch the field afterwards: the header is covered by Block 0's `PrevHash` and by the EoC `FileHash`, so a later modification (except the one-time `CipherLen` patch, Section 10.7) would invalidate both. Such a producer **SHOULD** record the exact count in the EoC block's `BlockCount` field instead (Table 12). Encrypted containers **MAY** leave the header field zero and rely on the (encrypted) EoC count. Every non-zero count—header or EoC—**MUST** equal the number of capture-segment blocks actually parsed, including the EoC block; otherwise the file **MUST** be considered truncated or corrupt (consumer rule 13).
 
 **Table 4: File header flags (`Flags`, 32 bits at offset `0x0C`).**
 
@@ -267,7 +268,7 @@ When `Encrypted` is set, `HeaderSize` **MUST** be 128. Bytes `0x00`–`0x3F` ret
 | `0x4E` | 2  | `KEMCtLen`   | KCL | KEM ciphertext length. 0 when `KeyEncap=0x00`. |
 | `0x50` | 24 | `Nonce`      | —   | AEAD nonce. AES-256-GCM: 12B used, rest zero. XChaCha20-Poly1305: all 24B. |
 | `0x68` | 16 | `KDFSalt`    | —   | KDF salt. Zeros if N/A. |
-| `0x78` | 8  | `Reserved3`  | Rsv | Zero. |
+| `0x78` | 8  | `CipherLen`  | CL  | Byte length of the primary AEAD ciphertext (Block 0 through EoC plus in-stream extension segments). 0 = not recorded. Excluded from the AAD (Section 10.2). |
 
 **Size:** 1+1+1+1+4+4+1+1+2+24+16+8 = 64. Total header: 64+64 = 128.
 
@@ -281,7 +282,7 @@ All multi-byte structural integers are little-endian (`Endianness=0x01`). Memory
 
 ### 3.4 Version Compatibility
 
-Unknown major version: **SHOULD** reject. Unknown minor of a known major: **MUST** parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via `BlockLength`, reserved fields ignored). Files that use any feature introduced in version 1.1 (extension segments, EoC `BlockCount`, `HashAlgo`, Thread Context, VAS Map `NameSource`, blocks `0x0054` and `0x0059`–`0x005B`, page state NotResident) **SHOULD** set `Version` to `0x0101`; files written as `0x0100` remain valid. Always use `HeaderSize` to locate Block 0.
+Unknown major version: **SHOULD** reject. Unknown minor of a known major: **MUST** parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via `BlockLength`, reserved fields ignored). Files that use any feature introduced in version 1.1 (extension segments, EoC `BlockCount`, `HashAlgo`, Thread Context, VAS Map `NameSource`, blocks `0x0054` and `0x0059`–`0x005B`, page state NotResident) **SHOULD** set `Version` to `0x0101`; files written as `0x0100` remain valid. Patch revisions (e.g., 1.1.1) do not change `Version`, which stays `0x0101` (there is no patch byte); they correct errata and define semantics for reserved fields whose zero value preserves the prior meaning. A 1.1.0 consumer computes the AAD over the unzeroed header and therefore cannot decrypt files with `CipherLen≠0` (Section 10.2); files with `CipherLen=0` are unaffected. A consumer whose tag verification fails on such a file **SHOULD** report that it may require 1.1.1 support rather than tampering (Section 10.2). Always use `HeaderSize` to locate Block 0.
 
 **Table 6: Target platform codes: (a) OS and (b) CPU.**
 
@@ -453,7 +454,7 @@ Completeness marker. An acquirer **SHOULD** emit it as the final block of the ca
 
 | Offset | Size | Field | Description |
 |---|---|---|---|
-| `+0x00` | 32 | `FileHash`   | *H* (`HashAlgo`) of all bytes from offset 0 through the last byte before this EoC block. Populated even when encrypted (computed over plaintext). |
+| `+0x00` | 32 | `FileHash`   | *H* (`HashAlgo`) of all bytes from offset 0 through the last byte before this EoC block. Populated even when encrypted (computed over plaintext). Bytes `0x78`–`0x7F` (`CipherLen`) are hashed as zero (Section 10.7). |
 | `+0x20` | 8  | `AcqEnd`     | Acquisition end time (UTC, ns since epoch). |
 | `+0x28` | 4  | `BlockCount` | Number of capture-segment blocks including this EoC block. `0` = unknown. A producer **SHOULD** record the exact count here; it is always known when the EoC block is written (Section 3.1, *BlockCount semantics*). |
 | `+0x2C` | 4  | `Reserved`   | Zero. |
@@ -465,13 +466,13 @@ Version 1.0.0 defined bytes `+0x28`–`+0x2F` as reserved (zero), which reads as
 An MSL file consists of the file header, exactly one **capture segment**, and zero or more **extension segments**, in this order (Figure 5a):
 
 ```
-File Header | Capture segment: Block 0 … EoC (0x0FFF) | Extension segment 1 | … | Extension segment n | [AEAD tag] | [trailing data]
+File Header | Capture segment: Block 0 … EoC (0x0FFF) | Extension segment 1 | … | Extension segment n | [AEAD tag] | [Sealed segment 1 … m] | [trailing data]
                                                                      └─ blocks … End-of-Extension (0x0FFE) ─┘
 ```
 
 The capture segment is the evidence: everything from Block 0 through the End-of-Capture block, exactly as the acquirer or importer wrote it. An extension segment is a run of one or more blocks terminated by an End-of-Extension block (`0x0FFE`). Extension segments let producers other than the acquirer—enrichment tools, analysis frameworks, importers preserving third-party annotations—add blocks after the capture has completed, without rewriting or re-hashing the capture segment and without patching the header. Each segment is self-delimiting and self-verifying, so a file remains usable if an appending tool is interrupted.
 
-*Figure 5a: File layout with extension segments. Each segment is a run of blocks closed by an End-of-Extension block whose `SegmentHash` covers the segment's preceding bytes; the `PrevHash` chain runs unbroken from the file header through every segment. In an encrypted container the segments lie inside the AEAD ciphertext and the tag follows the last segment.*
+*Figure 5a: File layout with extension segments. Each segment is a run of blocks closed by an End-of-Extension block whose `SegmentHash` covers the segment's preceding bytes; the `PrevHash` chain runs unbroken from the file header through every segment. In an encrypted container the segments lie inside the AEAD ciphertext and the tag follows the last segment; sealed extension segments (Section 10.8) may follow the tag.*
 
 **Chain continuity.** The integrity chain continues across the End-of-Capture block: the `PrevHash` of the first block of the first extension segment is *H*(EoC block bytes), and the chain remains linear across segment boundaries (the first block of segment *k*+1 hashes the End-of-Extension block of segment *k*). When `Encrypted` is set, all `PrevHash` fields in extension segments **MUST** be zero, as in the capture segment.
 
@@ -489,9 +490,9 @@ The capture segment is the evidence: everything from Block 0 through the End-of-
 
 **Permitted block types.** Extension segments carry derived or supplementary data, never evidence. The following types **MUST NOT** appear in an extension segment: Memory Region (`0x0001`), Module Entry (`0x0002`), `0x0010`–`0x0015`, Import Provenance (`0x0030`), Process Identity (`0x0040`), `0x0050`–`0x0058`, and End-of-Capture (`0x0FFF`). Permitted types are Key Hint (`0x0020`), Related Dump (`0x0041`), `0x0059`–`0x005B` (Sections 5.9–5.11), and the Structural namespace (`0x1000`–`0x1FFF`). Block types whose payload this specification does not define (e.g., Pointer Graph `0x1003`, producer-defined Structural types) **MAY** appear only in extension segments. Blocks in an extension segment **MAY** reference blocks in the capture segment or in earlier segments by `ParentUUID` or payload-embedded UUID (Section 8).
 
-**Producer rules.** A producer appending an extension segment **MUST NOT** modify any byte of the header, the capture segment, or an existing segment; **MUST** terminate every segment it writes with an End-of-Extension block; **MUST** continue the `PrevHash` chain from the last block already in the file (zero when encrypted); and **MUST** write the exact `BlockCount` and `SegmentHash`. A producer that finds trailing data after the last verified segment **SHOULD** refuse to append rather than build on unverified bytes. In an encrypted container, extension segments **MUST** lie inside the AEAD ciphertext, i.e., be written before the AEAD is finalized; nothing can be appended to a sealed container because the tag at EOF authenticates the whole stream (Section 10.2).
+**Producer rules.** A producer appending an extension segment **MUST NOT** modify any byte of the header, the capture segment, or an existing segment; **MUST** terminate every segment it writes with an End-of-Extension block; **MUST** continue the `PrevHash` chain from the last block already in the file (zero when encrypted); and **MUST** write the exact `BlockCount` and `SegmentHash`. A producer that finds trailing data after the last verified segment **SHOULD** refuse to append rather than build on unverified bytes. In an encrypted container, extension segments written before sealing **MUST** lie inside the primary AEAD ciphertext, i.e., be written before the AEAD is finalized; after sealing, a producer **MUST** append only sealed extension segments (Section 10.8).
 
-**Consumer rules.** After parsing and verifying the EoC block (and, when encrypted, the AEAD tag), a consumer **MUST** attempt to parse extension segments: read blocks until an End-of-Extension block, then verify (a) chain continuity from the preceding block (unencrypted files), (b) `SegmentHash`, and (c) `BlockCount`. Only a segment that passes all three checks is a *verified segment*; its blocks **MAY** then be presented alongside the capture. A segment that fails verification or is not terminated—EOF, non-magic bytes, or a block that fails framing before an End-of-Extension block is found—**MUST NOT** be presented as verified, and everything from its first byte to EOF is trailing data. Consumers that do not implement extension segments **MUST** treat everything after the EoC block as trailing data (consumer rule 14).
+**Consumer rules.** After parsing and verifying the EoC block (and, when encrypted, the AEAD tag), a consumer **MUST** attempt to parse extension segments: read blocks until an End-of-Extension block, then verify (a) chain continuity from the preceding block (unencrypted files), (b) `SegmentHash`, and (c) `BlockCount`. Only a segment that passes all three checks is a *verified segment*; its blocks **MAY** then be presented alongside the capture. A segment that fails verification or is not terminated—EOF, non-magic bytes, or a block that fails framing before an End-of-Extension block is found—**MUST NOT** be presented as verified, and everything from its first byte to EOF is trailing data. Consumers that do not implement extension segments **MUST** treat everything after the EoC block as trailing data (consumer rule 14). In an encrypted container, bytes after the primary AEAD tag are parsed as sealed extension segments (Section 10.8) before the remainder is treated as trailing data.
 
 *The next sections specify payload contents: per-process payloads (Section 5), investigation-mode payloads (Section 6), and the four-state page model (Section 7).*
 
@@ -698,7 +699,20 @@ Each register entry is self-describing and 8-byte aligned. The entry start (`+0x
 | `+0x08` | var | `Name`    | —  | UTF-8, pad8. Lowercase canonical register mnemonic. |
 | `+m`    | var | `Value`   | —  | `Width` bytes. Integer registers in the file's byte order (`Endianness`, Section 1.3); vector registers in the target's native lane order. Pad to 8B. |
 
-Register names **MUST** be the lowercase canonical mnemonic for the target architecture (e.g. `rax`, `rip`, `rsp`, `rflags` on x86_64; `x0`–`x30`, `sp`, `pc`, `pstate` on ARM64). A producer that emits a Thread Context block **MUST** include at least the program-counter and stack-pointer registers, and **SHOULD** set the program-counter, stack-pointer, frame-pointer, and flags bits in `Flags` on the corresponding entries so that consumers can locate them without architecture-specific knowledge. Consumers **MUST** preserve registers whose names they do not recognize and skip each entry via its declared `NameLen`/`Width` extents.
+Register names **MUST** be the lowercase canonical mnemonics of Table 19g for the architectures it lists. A producer that emits a Thread Context block **MUST** include at least the program-counter and stack-pointer registers, and **SHOULD** set the program-counter, stack-pointer, frame-pointer, and flags bits in `Flags` on the corresponding entries so that consumers can locate them without architecture-specific knowledge. Consumers **MUST** preserve registers whose names they do not recognize and skip each entry via its declared `NameLen`/`Width` extents.
+
+**Canonical register names.** For the architectures listed in Table 19g, register names **MUST** be the names given there. Aliases **MUST NOT** be written (ARM64 `fp`/`lr`; ARM32 `r13`–`r15`); consumers **SHOULD** normalise `fp`→`x29` and `lr`→`x30` in files from 1.1.0 producers. Registers not listed use the lowercase mnemonic of the architecture manual (e.g., `nzcv`, `v0`–`v31`, `xmm0`–`xmm15`). Listed integer registers, including flags and segment registers, use the GPR width, zero-extended. On x86_64, producers **MAY** write both `fs_base` and `gs_base`; the TLS flag (bit 4) is set only on the one the OS uses as thread pointer. Segment selectors (`fs`, `gs`) never carry the TLS flag; on x86 the TLS flag is set only if the producer records the segment base under a name not listed in Table 19g (e.g., `gs_base`).
+
+**Table 19g: Canonical register mnemonics.**
+
+| Arch | Names (role) |
+|---|---|
+| x86_64 | `rax`, `rbx`, `rcx`, `rdx`, `rsi`, `rdi`, `rbp` (FP), `rsp` (SP), `r8`–`r15`, `rip` (PC), `rflags` (FLAGS), `cs`, `ss`, `ds`, `es`, `fs`, `gs`, `fs_base`/`gs_base` (TLS: the one the OS uses as thread pointer, `fs_base` on Linux/Android/FreeBSD, `gs_base` on Windows/macOS); optional `orig_rax`. |
+| x86 | `eax`, `ebx`, `ecx`, `edx`, `esi`, `edi`, `ebp` (FP), `esp` (SP), `eip` (PC), `eflags` (FLAGS), `cs`, `ss`, `ds`, `es`, `fs`, `gs`. |
+| ARM64 | `x0`–`x28`, `x29` (FP), `x30` (LR), `sp` (SP), `pc` (PC), `pstate` (FLAGS), `tpidr_el0` (TLS on Linux/Android/FreeBSD), `tpidrro_el0` (TLS on macOS/iOS), `x18` (TEB on Windows; TLS flag set on `x18`). |
+| ARM32 | `r0`–`r12`, `sp` (SP), `lr` (LR), `pc` (PC), `cpsr` (FLAGS), `tpidruro` (TLS); `r11` (FP in ARM mode), `r7` (FP in Thumb mode and on Apple platforms). |
+
+**Importer mapping.** ELF `NT_PRSTATUS`: x86_64 `user_regs_struct` field names map directly, with `eflags`→`rflags`; ARM64 `user_pt_regs` maps to `x0`–`x30`, `sp`, `pc`, `pstate`; ARM64 `tpidr_el0` comes from the `NT_ARM_TLS` note, not `NT_PRSTATUS`. Minidump `CONTEXT_AMD64`: `Rax`…`R15` and `Rip` map to the lowercase names, `EFlags`→`rflags`, and `SegCs`/`SegDs`/`SegEs`/`SegFs`/`SegGs`/`SegSs`→`cs`/`ds`/`es`/`fs`/`gs`/`ss`; it has no `fs_base`/`gs_base`, so importers **MAY** write `gs_base` from `MINIDUMP_THREAD.Teb` with the TLS flag. `CONTEXT_ARM64`: `X0`–`X28`→`x0`–`x28`, `Fp`→`x29`, `Lr`→`x30`, `Sp`→`sp`, `Pc`→`pc`, `Cpsr`→`pstate`; `x18` carries the TEB.
 
 A producer **MUST** set `Suspended` only when the thread was stopped while its registers were read (e.g., ptrace-stopped, debugger-halted); registers sampled from a running thread **MUST** leave the bit clear, since they may not form a consistent snapshot. `Partial` **MUST** be set when the producer could not read every register it would normally record. Consumers **MAY** use the stack-pointer entries to attribute Memory Regions to threads (stack classification). Importers (Section 11) **MAY** emit Thread Context blocks from source-format thread records, such as ELF core `NT_PRSTATUS` notes or Minidump thread lists.
 
@@ -1056,16 +1070,19 @@ Full-container encryption is chosen over per-block encryption to prevent metadat
 
 ### 10.2 Encrypted File Layout
 
-*Figure 19: Encrypted file layout. The AEAD encrypts the block stream; the tag is an output, not itself encrypted.*
+*Figure 19: Encrypted file layout. The AEAD encrypts the block stream; the tag is an output, not itself encrypted. When `CipherLen≠0`, sealed extension segments (Section 10.8) and then trailing data may follow the tag.*
 
-1. **File header (128 B, cleartext):** Authenticated as Associated Data (AAD) to the AEAD, along with any KEM ciphertext. Tampering causes decryption failure.
-2. **KEM ciphertext (0 or variable, cleartext):** Present when `KeyEncap≠0x00`. Size is `KEMCtLen`. Also in AAD.
-3. **Encrypted block stream:** AEAD ciphertext of Block 0 through EoC, followed by any extension segments (Section 4.6). The only encrypted region.
-4. **AEAD authentication tag (16 B, not encrypted):** Output of the AEAD. Required for decryption. Requires the symmetric key.
+1. **File header (128 B, cleartext):** Authenticated as Associated Data (AAD) to the AEAD. The AAD is the file header with bytes `0x78`–`0x7F` (`CipherLen`) set to zero, followed by any KEM ciphertext. Tampering causes decryption failure.
+2. **KEM ciphertext (0 or variable, cleartext):** Present when `KeyEncap≠0x00`. Size is `KEMCtLen`. Also in AAD (item 1).
+3. **Encrypted block stream:** AEAD ciphertext of Block 0 through EoC, followed by any extension segments (Section 4.6). Its length is `CipherLen` when non-zero. The only encrypted region of the primary AEAD.
+4. **AEAD authentication tag (16 B, not encrypted):** Output of the AEAD. Required for decryption. Requires the symmetric key. Immediately follows the ciphertext.
+5. **Sealed extension segments (optional, cleartext header + ciphertext + tag):** Only when `CipherLen≠0` (Section 10.8).
 
-**Extension segments in encrypted containers.** Extension segments **MUST** lie inside the AEAD ciphertext, i.e., they are written before the AEAD is finalized, and the tag covers them. Because the tag at EOF authenticates the entire stream, nothing can be appended to a sealed container: producers **MUST NOT** write bytes after the tag, and consumers **MUST** treat any bytes after the tag as trailing non-MSL data. Enriching an already-sealed file requires decrypting it and re-sealing the result with a fresh `Nonce`.
+**Locating the tag.** When `CipherLen=0` (all 1.1.0 files, and non-seekable streaming producers, Section 10.7), the tag is the final 16 bytes of the file; such a file cannot carry sealed segments or trailing data. When `CipherLen≠0`, the ciphertext occupies [`HeaderSize`+`KEMCtLen`, `HeaderSize`+`KEMCtLen`+`CipherLen`) and the tag immediately follows it; sealed extension segments (Section 10.8), then trailing data, follow the tag. Consumers **MUST** reject `CipherLen` > file size − `HeaderSize` − `KEMCtLen` − 16. `CipherLen` lies outside the AAD, but changing it moves the tag boundary and thus changes the authenticated ciphertext and the tag bytes; verification then fails except with negligible probability. A consumer that fails tag verification on a file whose bytes `0x78`–`0x7F` are non-zero **SHOULD** report that the file may require 1.1.1 support rather than reporting tampering. For `CipherLen=0` the AAD is byte-identical to the 1.1.0 AAD.
 
-**Chain-of-custody without the key.** Producers **SHOULD** record an external hash of the complete file at acquisition time (BLAKE3 or SHA-256, offset 0 to EOF). This digest **SHOULD** be stored in the case evidence log, not in the file.
+**Extension segments in encrypted containers.** Extension segments written before sealing **MUST** lie inside the primary AEAD ciphertext, i.e., they are written before the AEAD is finalized, and the primary tag covers them. Enrichment after sealing appends sealed extension segments (Section 10.8), each separately authenticated and chained to the preceding tag; it requires the CEK and `CipherLen≠0`. Bytes after the primary tag that are not verified sealed segments are trailing non-MSL data.
+
+**Chain-of-custody without the key.** Producers **SHOULD** record an external hash of the complete file at acquisition time (BLAKE3 or SHA-256, offset 0 to EOF), computed after the `CipherLen` patch, i.e., over the final file. This digest **SHOULD** be stored in the case evidence log, not in the file.
 
 ### 10.3 Cipher Suites
 
@@ -1122,12 +1139,49 @@ When `Encrypted` is set:
 
 - `PrevHash`: **MUST** be zero in every block, in the capture segment and in extension segments. AEAD authenticates atomically.
 - EoC `FileHash` and End-of-Extension `SegmentHash`: **SHOULD** be computed over plaintext (enables post-decryption verification).
-- AAD: File header (128 B) + any KEM ciphertext.
-- Extension segments (Section 4.6) are part of the encrypted stream; the chain-continuity check is skipped (all `PrevHash` zero) but `SegmentHash` and `BlockCount` are verified after decryption. No segment **MAY** be appended after the tag.
+- AAD: the file header with bytes `0x78`–`0x7F` (`CipherLen`) set to zero, followed by any KEM ciphertext.
+- Extension segments (Section 4.6) are part of the encrypted stream; the chain-continuity check is skipped (all `PrevHash` zero) but `SegmentHash` and `BlockCount` are verified after decryption. Segments added after the primary tag are sealed extension segments (Section 10.8).
 
 ### 10.7 Streaming Encryption
 
-Producers **SHOULD** encrypt incrementally: (1) init AEAD with key, nonce, AAD; (2) for each block, serialize, encrypt, write; (3) after EoC and any extension segments, finalize AEAD, append 16-byte tag. A parallel hasher (`HashAlgo`) computes plaintext `FileHash` and `SegmentHash` before encryption. *O*(1) memory.
+Producers **SHOULD** encrypt incrementally: (1) write the header with `CipherLen`=0 (or its final value, if already known), init AEAD with key, nonce, AAD; (2) for each block, serialize, encrypt, write; (3) after EoC and any extension segments, finalize AEAD, append 16-byte tag; (4) if `CipherLen`=0 was written and the output is seekable, patch the 8 bytes at header offset `0x78` once with the primary ciphertext length. A parallel hasher (`HashAlgo`) computes plaintext `FileHash` and `SegmentHash` before encryption. *O*(1) memory.
+
+Producers **SHOULD** record `CipherLen`. Producers that know the ciphertext length before encryption begins **MAY** write the final value directly; otherwise they write 0 and, on seekable output, patch it once after the tag. Non-seekable producers that do not know the length leave it 0. The `CipherLen` patch is the only permitted modification of a written header, and only the producer that seals the primary AEAD stream **MAY** perform it; appenders (Section 4.6, Section 10.8) **MUST NOT**, and the header `BlockCount` is still never patched (producer rule 16). `FileHash` always covers the header with `CipherLen` zero (it is computed before any patch, and a directly written value is hashed as zero); consumers verifying `FileHash` **MUST** hash bytes `0x78`–`0x7F` as zero.
+
+### 10.8 Sealed Extension Segments
+
+A sealed extension segment adds one extension segment (Section 4.6) to an encrypted container after the primary AEAD tag has been written. Each sealed segment is a separate AEAD message under a per-segment subkey of the CEK, with its own nonce and tag, chained to the preceding tag. Sealed segments require a non-zero header `CipherLen` (Section 10.2).
+
+```
+… | Primary AEAD tag | SealHeader 1 | Ciphertext 1 | Tag 1 | … | SealHeader m | Ciphertext m | Tag m | [trailing data]
+```
+
+Each `SealHeader` is 64 bytes of cleartext (Table 27a), followed by `SegCipherLen` bytes of ciphertext and a 16-byte tag.
+
+**Table 27a: Sealed segment header (64 bytes).**
+
+| Offset | Size | Field | Abbr | Description |
+|---|---|---|---|---|
+| `+0x00` | 4  | `Magic`       | Mg  | `0x4D534C53` (`"MSLS"`). |
+| `+0x04` | 2  | `SealHdrSize` | SHS | 64. |
+| `+0x06` | 2  | `SegIndex`    | SI  | 1-based position of this sealed segment after the primary tag. |
+| `+0x08` | 8  | `SegCipherLen` | SCL | Ciphertext length in bytes. **MUST** be > 0. |
+| `+0x10` | 24 | `Nonce`       | —   | AEAD nonce, encoded as the header `Nonce` for `EncAlgo` (Table 5). |
+| `+0x28` | 24 | `Reserved`    | R   | Zero. |
+
+**Size:** 4+2+2+8+24+24 = 64.
+
+**Cipher suite and key.** The cipher suite is the header `EncAlgo`. Segment *i* is encrypted under `SegKey_i` = HKDF-BLAKE3(IKM=CEK, salt=`DumpUUID`, info=`"MSL-SEG-v1"` ‖ LE16(*i*)), the construction of Section 10.4, where the CEK is the Argon2id output, the external key, or the KEM-derived CEK. `SegIndex` therefore ranges from 1 to 65535. `Nonce` **MUST** be generated fresh from a CSPRNG for every segment; the per-segment subkey separates segment keys from the primary stream, and the fresh nonce prevents (key, nonce) reuse if a segment index is written again after a truncation.
+
+**Associated data.** AAD_*i* is the file header with bytes `0x78`–`0x7F` (`CipherLen`) set to zero, followed by any KEM ciphertext, followed by the 64-byte `SealHeader` of segment *i* and the tag of segment *i*−1, where Tag_0 is the primary tag. This binds each segment to its position, to the exact bytes it extends, and to this file, so segments cannot be grafted onto a re-sealed copy with the same `DumpUUID` and passphrase (against parties without the CEK).
+
+**Plaintext.** The plaintext is exactly one extension segment per Section 4.6: `PrevHash` **MUST** be zero, the End-of-Extension block **MUST** end exactly at `SegCipherLen`, the permitted-block-type rules apply, and `SegmentHash` and `BlockCount` are verified after decryption.
+
+**Producer rules.** A producer appending a sealed segment **MUST** hold the CEK (in KEM mode this requires the recipient's private key, so an acquirer that only holds the public key cannot append); **MUST** verify the primary tag and every existing sealed segment; **MUST** refuse when the header `CipherLen`=0; **SHOULD** refuse when trailing data is present; **MUST NOT** modify any earlier byte, including the header; and **MUST** write the whole sealed segment (`SealHeader`, ciphertext, tag) as one unit.
+
+**Consumer rules.** After the primary tag verifies, a consumer parses sealed segments in order, *i* = 1, 2, …. On any failure—short read, `Magic` or `SealHdrSize` mismatch, `SegIndex≠`*i*, `SegCipherLen` zero or exceeding the bytes remaining after the `SealHeader` minus 16, tag failure, or a malformed plaintext segment—everything from that segment's first byte to EOF is trailing data. A consumer **MUST NOT** present plaintext from a sealed segment before its tag verifies.
+
+**Security considerations.** Dropping trailing sealed segments is undetectable, exactly as for plaintext extension segments (Section 4.6); this is acceptable because evidence block types are forbidden in segments. Sealed segments never alter the capture segment or the primary ciphertext.
 
 ---
 
@@ -1173,9 +1227,9 @@ An MSL file may be created by importing a pre-existing raw memory dump (ELF core
 
 **Step 3:** Read blocks at `HeaderSize` (+`KEMCtLen` if encrypted) up to the EoC block. Verify `BlockLength≥80`. Parse or skip via `BlockLength`. Verify every non-zero `BlockCount` (header, EoC) against the parsed capture-segment count.
 
-**Step 4:** If unencrypted: verify the `PrevHash` chain with the algorithm selected by `HashAlgo`. If encrypted: verify AEAD tag.
+**Step 4:** If unencrypted: verify the `PrevHash` chain with the algorithm selected by `HashAlgo`. If encrypted: locate the AEAD tag at `HeaderSize`+`KEMCtLen`+`CipherLen` (or at EOF−16 when `CipherLen`=0), rejecting an out-of-bounds `CipherLen`, and verify it.
 
-**Step 5:** Verify EoC `FileHash` if present. Then parse extension segments (Section 4.6): verify chain continuity, `SegmentHash`, and `BlockCount` of each; the remainder is trailing data.
+**Step 5:** Verify EoC `FileHash` if present. Then parse extension segments (Section 4.6): verify chain continuity, `SegmentHash`, and `BlockCount` of each. If encrypted and `CipherLen≠0`, then parse sealed extension segments after the tag (Section 10.8). The remainder is trailing data.
 
 **Step 6:** `Investigation`? Expect Block 2 = System Context.
 
@@ -1222,7 +1276,7 @@ A conformant acquirer **MUST** emit Process Identity as Block 0 and Module List 
 
 **Investigation:** (17) emit System Context as Block 2; (18) set `CapBitmap` bit 11; (19) set `TableBitmap`; (20) set `Redacted` flag (bit 3) when any field has been intentionally stripped or pseudonymized.
 
-**Encryption:** (21) `HeaderSize=128`; (22) valid encryption extension; (23) AEAD with header (+KEM ct) as AAD; (24) append 16-byte tag; (25) zero all `PrevHash`; (26) `Nonce` from CSPRNG; (27) KEM ciphertext after header when `KeyEncap≠0x00`.
+**Encryption:** (21) `HeaderSize=128`; (22) valid encryption extension; (23) AEAD with header (+KEM ct) as AAD, bytes `0x78`–`0x7F` zeroed (Section 10.2); (24) append 16-byte tag immediately after the ciphertext, and append after it only sealed extension segments (Section 10.8); (25) zero all `PrevHash`; (26) `Nonce` from CSPRNG; (27) KEM ciphertext after header when `KeyEncap≠0x00`.
 
 **Compression:** (28) when `Compressed` is set, write 8-byte `UncompressedSize` before compressed data; (29) set `BlockLength` to on-disk size.
 
@@ -1230,17 +1284,23 @@ A conformant acquirer **MUST** emit Process Identity as Block 0 and Module List 
 
 **Hash algorithm:** (31) set `HashAlgo` to a registered code from Table 11a; the default (`0x00`, BLAKE3) **SHOULD** be used unless FIPS compliance, organizational policy, or platform performance measurements indicate otherwise; (32) use the selected algorithm exclusively for all `PrevHash`, `FileHash`, `SegmentHash`, and `DiskHash` computations within the file; **MUST NOT** mix algorithms within a single file.
 
-**Extension segments:** (33) when appending, **MUST NOT** modify any byte of the header, the capture segment, or an existing extension segment; (34) terminate every extension segment with an End-of-Extension block carrying the exact `SegmentHash` and `BlockCount`; (35) continue the `PrevHash` chain from the last block already in the file (zero when encrypted); (36) emit only the block types Section 4.6 permits in extension segments; (37) in encrypted containers, write extension segments inside the AEAD stream before the tag and never append after the tag.
+**Extension segments:** (33) when appending, **MUST NOT** modify any byte of the header, the capture segment, or an existing extension segment; (34) terminate every extension segment with an End-of-Extension block carrying the exact `SegmentHash` and `BlockCount`; (35) continue the `PrevHash` chain from the last block already in the file (zero when encrypted); (36) emit only the block types Section 4.6 permits in extension segments; (37) in encrypted containers, write extension segments inside the AEAD stream before the tag; after the tag, append only sealed extension segments (Section 10.8).
 
 **Thread Context:** a producer that captures thread register state **SHOULD** emit one Thread Context block (`0x0011`) per thread, set the `Current` flag on exactly one of them, set `CapBitmap` bit 2, and include at least the program-counter and stack-pointer registers (Section 5.7). (38) Thread Context blocks **MUST** be written in the capture segment and **SHOULD** precede the first Memory Region; (39) set `Suspended` only for registers read from a stopped thread and `Partial` whenever the register file is incomplete.
+
+**Ciphertext length:** (40) write `CipherLen` either as its final value or as 0; when 0 is written and the output is seekable, the sealing producer **MAY** patch it once after the tag (Section 10.7); no other party patches it.
+
+**Sealed extension segments:** (41) when appending after the primary tag, write only sealed extension segments per Section 10.8: hold the CEK, verify the primary tag and every existing sealed segment, refuse when the header `CipherLen`=0, use `SegKey_i` with a fresh CSPRNG `Nonce`, write each segment as one unit, and never modify earlier bytes.
+
+**Register names:** (42) name Thread Context registers per Table 19g for the architectures it lists, and never write aliases (ARM64 `fp`/`lr`; ARM32 `r13`–`r15`).
 
 A producer **SHOULD** emit an EoC block. `FileHash` **SHOULD** be computed over plaintext even when encrypted. When encrypted, the producer **SHOULD** record an external file hash for chain-of-custody.
 
 ### 14.2 Consumer
 
-A conformant consumer **MUST**: (1) reject invalid magic or `Endianness≠0x01`; (2) use `HeaderSize` to locate blocks; (3) skip unknown types via `BlockLength`; (4) reject `BlockLength < 80`; (5) detect end-of-blocks; (6) ignore reserved fields; (7) reject type `0x0000`; (8) skip unrecognized `PayloadVersion` for known block types with a logged warning indicating which block types were affected; (9) treat all-zero `DiskHash` as unavailable; (10) reject `PageSizeLog2` outside [10, 40]; (11) use explicit length fields to determine string extent, not NUL-scanning beyond the declared length; (12) preserve raw bytes for malformed UTF-8 fields and not reject the entire block; (13) verify that every non-zero block count—header `BlockCount` and EoC `BlockCount`—equals the number of capture-segment blocks parsed including the EoC block, and otherwise report the file as truncated or corrupt; accept a 40-byte EoC payload as count unknown; (14) after a verified EoC block (and, when encrypted, the AEAD tag), attempt to parse extension segments per Section 4.6 and treat everything after the last verified segment as trailing non-MSL data.
+A conformant consumer **MUST**: (1) reject invalid magic or `Endianness≠0x01`; (2) use `HeaderSize` to locate blocks; (3) skip unknown types via `BlockLength`; (4) reject `BlockLength < 80`; (5) detect end-of-blocks; (6) ignore reserved fields; (7) reject type `0x0000`; (8) skip unrecognized `PayloadVersion` for known block types with a logged warning indicating which block types were affected; (9) treat all-zero `DiskHash` as unavailable; (10) reject `PageSizeLog2` outside [10, 40]; (11) use explicit length fields to determine string extent, not NUL-scanning beyond the declared length; (12) preserve raw bytes for malformed UTF-8 fields and not reject the entire block; (13) verify that every non-zero block count—header `BlockCount` and EoC `BlockCount`—equals the number of capture-segment blocks parsed including the EoC block, and otherwise report the file as truncated or corrupt; accept a 40-byte EoC payload as count unknown; (14) after a verified EoC block (and, when encrypted, the primary AEAD tag), attempt to parse extension segments per Section 4.6 and, when `CipherLen≠0`, sealed extension segments per Section 10.8, and treat everything after the last verified segment as trailing non-MSL data.
 
-**Encryption:** (15) reject `HeaderSize≠128`; read KEM ct; decrypt via AEAD with AAD; reject on failure; (16) skip `PrevHash` verification.
+**Encryption:** (15) reject `HeaderSize≠128`; read KEM ct; decrypt via AEAD with AAD (with `CipherLen` zeroed, Section 10.2); reject on failure; (16) skip `PrevHash` verification.
 
 **Investigation:** (17) expect Block 2 = System Context; check `TableBitmap`; (18) if `Redacted` is set, interpret zero-length optional strings as intentionally redacted rather than absent.
 
@@ -1253,6 +1313,12 @@ A conformant consumer **MUST**: (1) reject invalid magic or `Endianness≠0x01`;
 **Extension segments:** (23) verify chain continuity from the EoC block (unencrypted files), `SegmentHash`, and `BlockCount` of every extension segment, and **MUST NOT** present an unterminated or failing segment as verified; (24) accept Structural and producer-defined block types in verified segments, skipping unrecognized payloads via `BlockLength`; (25) honour the last VAS Map in file order (Section 5.8) and merge Module Build-ID Manifest rows by `BaseAddr` (Section 5.10).
 
 **Page states:** (26) decode `PageStateMap` value `11` as NotResident (a zero-content page, Section 7), never as a read failure.
+
+**Ciphertext length:** (27) locate the AEAD tag at EOF−16 when `CipherLen`=0, otherwise at `HeaderSize`+`KEMCtLen`+`CipherLen`; reject `CipherLen` > file size − `HeaderSize` − `KEMCtLen` − 16 (Section 10.2).
+
+**Sealed extension segments:** (28) verify sealed segments in order per Section 10.8; **MUST NOT** present plaintext from a sealed segment before its tag verifies; treat everything from the first failing segment to EOF as trailing data.
+
+**Register names:** (29) **SHOULD** normalise ARM64 `fp`→`x29` and `lr`→`x30` in Thread Context blocks written by 1.1.0 producers.
 
 A consumer **SHOULD**: verify the `PrevHash` chain when unencrypted; verify EoC `FileHash` after decryption.
 
@@ -1281,6 +1347,13 @@ A consumer **SHOULD**: verify the `PrevHash` chain when unencrypted; verify EoC 
 ---
 
 ## 15. Revision History
+
+**1.1.1 — 2026-10-23.** Patch revision; the header `Version` remains `0x0101` (Section 3.4).
+
+- **`CipherLen`** (header offset `0x78`, formerly `Reserved3`; Sections 3.2, 10.2, 10.7): byte length of the primary AEAD ciphertext. The AAD is now the file header with bytes `0x78`–`0x7F` (`CipherLen`) set to zero, followed by any KEM ciphertext; for `CipherLen=0` it is byte-identical to the 1.1.0 AAD. Producers write the final value or 0; a seekable sealing producer that wrote 0 patches it once after the tag, the only permitted header patch. A 1.1.0 consumer cannot decrypt files with `CipherLen≠0`; files with `CipherLen=0` are unaffected. Producer rules 23, 24, 40; consumer rule 27.
+- **Sealed extension segments** (Section 10.8, Table 27a): an encrypted container can be enriched after sealing by appending AEAD segments under per-segment HKDF-BLAKE3 subkeys of the CEK, each with a 64-byte `SealHeader` (ciphertext length `SegCipherLen`, nonce) and its own tag, chained to the preceding tag; requires a non-zero header `CipherLen`. Replaces the 1.1.0 rule that nothing may be appended after the tag. Producer rules 37, 41; consumer rules 14, 28.
+- **Canonical register mnemonics** (Section 5.7, Table 19g): register names for x86_64, x86, ARM64 and ARM32 are normative; aliases (`fp`, `lr`, `r13`–`r15`) are forbidden; consumers normalise `fp`→`x29`, `lr`→`x30`. Producer rule 42; consumer rule 29.
+- **Erratum:** 1.1.0 permitted trailing data after the AEAD tag but gave no means to locate the tag; the tag is now located via `CipherLen` (Sections 10.2, 12).
 
 **1.1.0 — 2026-10-23.** Minor revision; 1.0.0 files remain valid, consumers **MUST** accept any minor of major 1 (Section 3.4).
 

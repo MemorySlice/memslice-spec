@@ -24,6 +24,20 @@ Memory Slice captures the complete forensic state of a single operating system p
 
 **Version:** 1.1.1 (Working Draft)
 
+## Implementations
+
+Tools that produce (write) or consume (read) `.msl` files:
+
+| Project | Language | Role | Description |
+|---------|----------|------|-------------|
+| [memslicer](https://github.com/MemorySlice/memslicer) | Python | Producer | Process memory acquisition via Frida, GDB and LLDB; `memslicer-enrich` appends extension segments |
+| [memslicer-rs](https://github.com/MemorySlice/memslicer-rs) | Rust | Producer | Frida-based cross-platform process memory acquisition |
+| [libmsl](https://github.com/MemorySlice/libmsl) | Rust | Library | Streaming and zero-copy reader, streaming writer |
+| [MemDiver](https://github.com/MemorySlice/MemDiver) | Python | Consumer | Interactive identification and analysis of data structures in memory dumps |
+| [radare2 `msl` plugins](https://github.com/radareorg/radare2-extras/tree/master/msl) | C | Consumer, Producer | `io.msl`/`bin.msl` open a slice as a CORE object; `debug.msl` emulates (ESIL) from the captured Thread Context, with thread selection and reverse stepping; `core.msl` writes a slice from a live debug session (`dgm`) |
+
+To list another implementation, open a pull request.
+
 ## Building the PDF
 
 The LaTeX source is self-contained, but it needs a specific TeX Live package set

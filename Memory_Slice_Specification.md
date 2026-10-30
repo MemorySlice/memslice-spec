@@ -1,6 +1,6 @@
 # Memory Slice (.msl) — Binary Format Specification
 
-**Version:** 1.1.1
+**Version:** 1.1.2
 **Status:** Working Draft
 
 ---
@@ -416,8 +416,9 @@ When the `Compressed` flag is set, only the payload portion (bytes after the 80-
 | `0x0FFF` | End-of-Capture      | Completeness marker (Sec. 4.5). |
 | `0x1001` | VAS Map             | Enumerated virtual address space (Sec. 5.8). |
 | `0x1003` | Pointer Graph       | Pointer relationships. Producer-defined payload; extension segments only (Sec. 4.6). |
+| `0x1B70` | Analysis Findings   | Analysis results as a schema-tagged JSON document (Sec. 5.12). Extension segments only. |
 
-Block types listed without a section reference (`0x0012`–`0x0015`) are reserved evidence types whose payload formats will be defined in future versions of this specification. Producers **MUST NOT** emit them anywhere until their payloads are specified; they are also excluded from extension segments. Block types whose payload this document does not specify but which are not evidence—the Pointer Graph (`0x1003`) and other producer-defined Structural types—**MAY** be emitted only in extension segments (Section 4.6), where a consumer that does not recognize the payload skips the block. Consumers **MUST** skip unknown types via `BlockLength`.
+Block types listed without a section reference (`0x0012`–`0x0015`) are reserved evidence types whose payload formats will be defined in future versions of this specification. Producers **MUST NOT** emit them anywhere until their payloads are specified; they are also excluded from extension segments. Block types whose payload this document does not specify but which are not evidence—the Pointer Graph (`0x1003`) and other producer-defined Structural types—**MAY** be emitted only in extension segments (Section 4.6), where a consumer that does not recognize the payload skips the block. The Analysis Findings block (`0x1B70`, Section 5.12) is the registered Structural type for analysis tools that have no need for a dedicated binary payload: its JSON document is identified by a schema string, so consumers can dispatch on it without a new block type per tool. Consumers **MUST** skip unknown types via `BlockLength`.
 
 ### 4.4 Integrity Chain (`PrevHash`)
 
@@ -821,6 +822,32 @@ Unlike the general convention of Section 1.3, the strings in this block carry **
 | `+0x18` | var | `Name`       | —   | UTF-8, pad8. Mapped path or region name. Omitted when `NameLen`=0. |
 
 *Figure 11e: Region Omission Manifest (`0x005B`). Abbreviations per Table 19f.*
+
+### 5.12 Analysis Findings (`0x1B70`)
+
+An Analysis Findings block carries the results an analysis tool derived from a slice—static triage of a captured image, behaviour observed under emulation, indicators of compromise, rebuilt import tables, technique mappings—as a JSON document tagged with a schema identifier. It is the registered carrier for tool results in the Structural namespace: a tool that needs no dedicated binary layout **SHOULD** use this block with its own schema rather than allocate a producer-defined type. The block **MUST** appear only in extension segments (Section 4.6); it never modifies or replaces capture-time data. Several Analysis Findings blocks **MAY** coexist (different tools, different runs of the same tool); readers present them in file order. `ParentUUID` is zero, or the `BlockUUID` of the block the findings are about (e.g., a Memory Region holding the analysed image).
+
+**Table 19h: Analysis Findings payload.**
+
+| Offset | Size | Field | Abbr | Description |
+|---|---|---|---|---|
+| `+0x00` | 4   | `JsonLen`   | JL  | Byte length of `Json` before padding (no NUL). |
+| `+0x04` | 2   | `SchemaLen` | ScL | Length of `Schema` incl. NUL. **MUST** be ≥ 2. |
+| `+0x06` | 2   | `Reserved`  | R   | Zero. |
+| `+0x08` | var | `Schema`    | —   | UTF-8, NUL-terminated, pad8. Identifies the document layout as `<producer>-<document>/<major>`, e.g., `bintopsy-findings/1`. A consumer that does not know the schema **MAY** still present the JSON opaquely. |
+| `+s`    | var | `Json`      | —   | UTF-8 JSON text, pad8 (zero padding; not part of the document). **MUST** be a single JSON object. |
+
+**Schema conventions.** The `<major>` component changes only when a document is no longer readable by a consumer of the previous major; additive changes keep it. The JSON object **SHOULD** carry a `sample` member describing what was analysed in terms a reader can join back to the capture (module base address, region base, or the slice's process identity) and **MAY** carry a `report` member with a path or URI to a human-readable rendering. Timestamps and the producing tool's name and version are already recorded by the End-of-Extension block that terminates the segment (Table 12a) and need not be repeated.
+
+**Registered schemas.**
+
+| Schema | Producer | Content |
+|---|---|---|
+| `bintopsy-findings/1` | [BinTopsy](https://github.com/reverseame/BinTopsy) | `sample`, `image_base`, `image_sha256`; `techniques` (MITRE ATT&CK technique id, name, score, per-function evidence tagged static / emulated); `findings` (per-function capability buckets, techniques, emulated calls and argument strings); `iocs` (category, value, sources, referencing functions); `iat` (resolved import slots: address, module, export name, RVA); `report` (path to the HTML report). |
+
+To register another schema, open a pull request adding a row to this table.
+
+*Figure 11f: Analysis Findings (`0x1B70`). Abbreviations per Table 19h.*
 
 ---
 
@@ -1347,6 +1374,10 @@ A consumer **SHOULD**: verify the `PrevHash` chain when unencrypted; verify EoC 
 ---
 
 ## 15. Revision History
+
+**1.1.2 — 2026-10-30.** Patch revision; the header `Version` remains `0x0101` (Section 3.4).
+
+- **Analysis Findings** (`0x1B70`, Section 5.12, Table 19h): a registered Structural block carrying tool results as a schema-tagged JSON document (`JsonLen`, `SchemaLen`, `Schema`, `Json`), extension segments only; first registered schema `bintopsy-findings/1`. Tools no longer need a producer-defined type each; a 1.1.1 consumer skips the block via `BlockLength` as before.
 
 **1.1.1 — 2026-10-23.** Patch revision; the header `Version` remains `0x0101` (Section 3.4).
 

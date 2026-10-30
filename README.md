@@ -22,7 +22,7 @@ Memory Slice captures the complete forensic state of a single operating system p
 | Markdown | [Memory_Slice_Specification.md](Memory_Slice_Specification.md) |
 | PDF | [Memory_Slice_Specification.pdf](Memory_Slice_Specification.pdf) |
 
-**Version:** 1.1.1 (Working Draft)
+**Version:** 1.1.2 (Working Draft)
 
 ## Implementations
 
@@ -35,6 +35,7 @@ Tools that produce (write) or consume (read) `.msl` files:
 | [libmsl](https://github.com/MemorySlice/libmsl) | Rust | Library | Streaming and zero-copy reader, streaming writer |
 | [MemDiver](https://github.com/MemorySlice/MemDiver) | Python | Consumer | Interactive identification and analysis of data structures in memory dumps |
 | [radare2 `msl` plugins](https://github.com/radareorg/radare2-extras/tree/master/msl) | C | Consumer, Producer | `io.msl`/`bin.msl` open a slice as a CORE object; `debug.msl` emulates (ESIL) from the captured Thread Context, with thread selection and reverse stepping; `core.msl` writes a slice from a live debug session (`dgm`) |
+| [BinTopsy](https://github.com/reverseame/BinTopsy) | Python | Consumer, Producer | Static triage of the captured process image (IAT rebuilt from the slice's module list and PE exports, ATT&CK mapping, IoCs); appends its results as Analysis Findings (`0x1B70`, schema `bintopsy-findings/1`) in an extension segment |
 
 To list another implementation, open a pull request.
 

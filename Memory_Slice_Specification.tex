@@ -96,7 +96,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small\color{muted}Memory Slice (.msl) Format Specification}
-\fancyhead[R]{\small\color{muted}Version 1.1.1}
+\fancyhead[R]{\small\color{muted}Version 1.1.2}
 \fancyfoot[C]{\small\color{muted}\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -138,10 +138,10 @@
 {\LARGE\bfseries\color{accent} Binary Format Specification\par}\vspace{0.5cm}
 {\color{muted!50}\rule{\textwidth}{0.5pt}}\vspace{1cm}
 {\large\color{muted}
-Version: 1.1.1\\[4pt]
+Version: 1.1.2\\[4pt]
 Status: Working Draft\\[4pt]
 Editor(s): Daniel Baier\\[4pt]
-This version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/releases/tag/v1.1.1}}\\[4pt]
+This version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/releases/tag/v1.1.2}}\\[4pt]
 Latest version: {\footnotesize\url{https://github.com/MemorySlice/memslice-spec/}}
 }\vspace{1.5cm}
 \begin{abstract}\noindent
@@ -559,10 +559,11 @@ When the \field{Compressed} flag is set, only the payload portion (bytes after t
 0x0FFE & End-of-Extension & Extension segment terminator (Sec.~\ref{sec:extsegments}). \\
 0x0FFF & End-of-Capture & Completeness marker (Sec.~\ref{sec:eoc}). \\\midrule
 0x1001 & VAS Map & Enumerated virtual address space (Sec.~\ref{sec:vasmap}). \\
-0x1003 & Pointer Graph & Pointer relationships. Producer-defined payload; extension segments only (Sec.~\ref{sec:extsegments}). \\\bottomrule
+0x1003 & Pointer Graph & Pointer relationships. Producer-defined payload; extension segments only (Sec.~\ref{sec:extsegments}). \\
+0x1B70 & Analysis Findings & Analysis results as a schema-tagged JSON document (Sec.~\ref{sec:findings}). Extension segments only. \\\bottomrule
 \end{tabular}\end{table}
 
-\noindent Block types listed without a section reference (\hex{0012}--\hex{0015}) are reserved evidence types whose payload formats will be defined in future versions of this specification. Producers \MUSTNOT{} emit them anywhere until their payloads are specified; they are also excluded from extension segments. Block types whose payload this document does not specify but which are not evidence---the Pointer Graph (\hex{1003}) and other producer-defined Structural types---\MAY{} be emitted only in extension segments (Section~\ref{sec:extsegments}), where a consumer that does not recognize the payload skips the block. Consumers \MUST{} skip unknown types via \field{BlockLength}.
+\noindent Block types listed without a section reference (\hex{0012}--\hex{0015}) are reserved evidence types whose payload formats will be defined in future versions of this specification. Producers \MUSTNOT{} emit them anywhere until their payloads are specified; they are also excluded from extension segments. Block types whose payload this document does not specify but which are not evidence---the Pointer Graph (\hex{1003}) and other producer-defined Structural types---\MAY{} be emitted only in extension segments (Section~\ref{sec:extsegments}), where a consumer that does not recognize the payload skips the block. The Analysis Findings block (\hex{1B70}, Section~\ref{sec:findings}) is the registered Structural type for analysis tools that have no need for a dedicated binary payload: its JSON document is identified by a schema string, so consumers can dispatch on it without a new block type per tool. Consumers \MUST{} skip unknown types via \field{BlockLength}.
 
 \subsection{Integrity Chain (\field{PrevHash})}\label{sec:hashchain}
 The integrity hash algorithm is selected by the \field{HashAlgo} field in the file header (Table~\ref{tab:fileheader}). All integrity fields within a single file---\field{PrevHash}, EoC \field{FileHash}, End-of-Extension \field{SegmentHash}, and Module Entry \field{DiskHash}---\MUST{} use the same algorithm; producers \MUSTNOT{} mix algorithms within a file. All registered algorithms produce a 32-byte output, so field layouts are independent of the selection.
@@ -1130,6 +1131,39 @@ $+s$ & var & \field{Patterns} & --- & UTF-8, pad8. Exclusion patterns joined wit
 \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=accent] (ba.south west)--(nm.south east) node[midway, below=18pt, font=\tiny\color{accent}] {one row, 24-B head + name ($\times$RC)};
 \draw[-{Stealth[length=3pt]}, thick, dashed, color=accent] (pt.south) to[out=-90, in=90] (more.north);
 \end{tikzpicture}}\caption{Region Omission Manifest (\hex{005B}). Abbreviations per Table~\ref{tab:omission}.}\label{fig:omission-payload}\end{figure}
+
+\subsection{Analysis Findings (\hex{1B70})}\label{sec:findings}
+An Analysis Findings block carries the results an analysis tool derived from a slice---static triage of a captured image, behaviour observed under emulation, indicators of compromise, rebuilt import tables, technique mappings---as a JSON document tagged with a schema identifier. It is the registered carrier for tool results in the Structural namespace: a tool that needs no dedicated binary layout \SHOULD{} use this block with its own schema rather than allocate a producer-defined type. The block \MUST{} appear only in extension segments (Section~\ref{sec:extsegments}); it never modifies or replaces capture-time data. Several Analysis Findings blocks \MAY{} coexist (different tools, different runs of the same tool); readers present them in file order. \field{ParentUUID} is zero, or the \field{BlockUUID} of the block the findings are about (e.g., a Memory Region holding the analysed image).
+
+\begin{table}[H]\centering\caption{Analysis Findings payload.}\label{tab:findings}\small
+\begin{tabular}{M M l l p{5.5cm}}\toprule\textbf{Off}&\textbf{Size}&\textbf{Field}&\textbf{Abbr}&\textbf{Description}\\\midrule
++0x00 & 4 & \field{JsonLen} & JL & Byte length of \field{Json} before padding (no NUL). \\
++0x04 & 2 & \field{SchemaLen} & ScL & Length of \field{Schema} incl. NUL. \MUST{} be $\geq 2$. \\
++0x06 & 2 & \field{Reserved} & R & Zero. \\
++0x08 & var & \field{Schema} & --- & UTF-8, NUL-terminated, pad8. Identifies the document layout as \texttt{<producer>-<document>/<major>}, e.g., \texttt{bintopsy-findings/1}. A consumer that does not know the schema \MAY{} still present the JSON opaquely. \\
+$+s$ & var & \field{Json} & --- & UTF-8 JSON text, pad8 (zero padding; not part of the document). \MUST{} be a single JSON object. \\\bottomrule
+\end{tabular}\end{table}
+
+\noindent\textbf{Schema conventions.} The \texttt{<major>} component changes only when a document is no longer readable by a consumer of the previous major; additive changes keep it. The JSON object \SHOULD{} carry a \texttt{sample} member describing what was analysed in terms a reader can join back to the capture (module base address, region base, or the slice's process identity) and \MAY{} carry a \texttt{report} member with a path or URI to a human-readable rendering. Timestamps and the producing tool's name and version are already recorded by the End-of-Extension block that terminates the segment (Table~\ref{tab:eox}) and need not be repeated.
+
+\noindent\textbf{Registered schemas.}
+\begin{table}[H]\centering\small
+\begin{tabular}{l l p{8.5cm}}\toprule\textbf{Schema}&\textbf{Producer}&\textbf{Content}\\\midrule
+\texttt{bintopsy-findings/1} & BinTopsy & \texttt{sample}, \texttt{image\_base}, \texttt{image\_sha256}; \texttt{techniques} (MITRE ATT\&CK technique id, name, score, per-function evidence tagged static / emulated); \texttt{findings} (per-function capability buckets, techniques, emulated calls and argument strings); \texttt{iocs} (category, value, sources, referencing functions); \texttt{iat} (resolved import slots: address, module, export name, RVA); \texttt{report} (path to the HTML report). \\\bottomrule
+\end{tabular}\end{table}
+\noindent To register another schema, open a pull request adding a row to this table.
+
+\begin{figure}[H]\centering
+\resizebox{0.8\textwidth}{!}{\begin{tikzpicture}[fld/.style={draw, minimum height=1.0cm, align=center, font=\tiny},lbl/.style={font=\tiny\ttfamily, color=muted}]
+\node[fld, text width=2.2cm, fill=hdrBox, draw=hdrBoxB, rounded corners=1pt] (hdr) at (0,0) {\textbf{Block Hdr}\\80\,B\\\tiny\texttt{0x1B70}};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of hdr] (jl) {\textbf{JL}\\4};
+\node[fld, text width=0.6cm, fill=fldPreamble, draw=fldPreambleB, right=0pt of jl] (scl) {\textbf{ScL}\\2};
+\node[fld, text width=0.4cm, fill=colReserved, draw=colReservedB, right=0pt of scl] (r) {\textbf{R}\\2};
+\node[fld, text width=1.6cm, fill=hdrPayload, draw=hdrPayloadB, right=0pt of r] (sc) {\textbf{Schema}\\var};
+\node[fld, text width=2.4cm, fill=fldData, draw=fldDataB, right=0pt of sc] (js) {\textbf{Json}\\var};
+\node[lbl, above=1pt of hdr.north] {\hex{00}}; \node[lbl, above=1pt of jl.north west, anchor=south west] {\hex{50}};
+\draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=12pt}, thick, color=fldPreambleB] (jl.south west)--(sc.south east) node[midway, below=18pt, font=\tiny\color{fldPreambleB}] {Preamble (8\,B + schema)};
+\end{tikzpicture}}\caption{Analysis Findings (\hex{1B70}). Abbreviations per Table~\ref{tab:findings}.}\label{fig:findings-payload}\end{figure}
 
 %% ======================================================================
 \newpage
@@ -1755,6 +1789,11 @@ A conformant consumer \MUST: (1) reject invalid magic or \field{Endianness} $\ne
 %% ======================================================================
 \section{Revision History}\label{sec:revhistory}
 %% ======================================================================
+\noindent\textbf{1.1.2 --- 2026-10-30.} Patch revision; the header \field{Version} remains \hex{0101} (Section~\ref{sec:versioncompat}).
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+\item \textbf{Analysis Findings} (\hex{1B70}, Section~\ref{sec:findings}, Table~\ref{tab:findings}): a registered Structural block carrying tool results as a schema-tagged JSON document (\field{JsonLen}, \field{SchemaLen}, \field{Schema}, \field{Json}), extension segments only; first registered schema \texttt{bintopsy-findings/1}. Tools no longer need a producer-defined type each; a 1.1.1 consumer skips the block via \field{BlockLength} as before.
+\end{itemize}
+
 \noindent\textbf{1.1.1 --- 2026-10-23.} Patch revision; the header \field{Version} remains \hex{0101} (Section~\ref{sec:versioncompat}).
 \begin{itemize}[leftmargin=1.5em, itemsep=3pt]
 \item \textbf{\field{CipherLen}} (header offset \hex{78}, formerly \field{Reserved3}; Sections~\ref{sec:enchdr}, \ref{sec:enclayout}, \ref{sec:streamenc}): byte length of the primary AEAD ciphertext. The AAD is now the file header with bytes \hex{78}--\hex{7F} (\field{CipherLen}) set to zero, followed by any KEM ciphertext; for \field{CipherLen}=0 it is byte-identical to the 1.1.0 AAD. Producers write the final value or 0; a seekable sealing producer that wrote 0 patches it once after the tag, the only permitted header patch. A 1.1.0 consumer cannot decrypt files with \field{CipherLen}$\neq$0; files with \field{CipherLen}=0 are unaffected. Producer rules 23, 24, 40; consumer rule~27.

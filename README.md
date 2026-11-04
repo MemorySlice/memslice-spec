@@ -35,7 +35,9 @@ Tools that produce (write) or consume (read) `.msl` files:
 | [libmsl](https://github.com/MemorySlice/libmsl) | Rust | Library | Streaming and zero-copy reader, streaming writer |
 | [MemDiver](https://github.com/MemorySlice/MemDiver) | Python | Consumer | Interactive identification and analysis of data structures in memory dumps |
 | [radare2 `msl` plugins](https://github.com/radareorg/radare2-extras/tree/master/msl) | C | Consumer, Producer | `io.msl`/`bin.msl` open a slice as a CORE object; `debug.msl` emulates (ESIL) from the captured Thread Context, with thread selection and reverse stepping; `core.msl` writes a slice from a live debug session (`dgm`) |
-| [BinTopsy](https://github.com/reverseame/BinTopsy) | Python | Consumer, Producer | Static triage of the captured process image (IAT rebuilt from the slice's module list and PE exports, ATT&CK mapping, IoCs); appends its results as Analysis Findings (`0x1B70`, schema `bintopsy-findings/1`) in an extension segment |
+| [BinTopsy](https://github.com/reverseame/BinTopsy) | Python | Consumer, Enricher | Static triage of the captured process image (IAT rebuilt from the slice's module list and PE exports, ATT&CK mapping, IoCs); appends its results as Analysis Findings (`0x1B70`, schema `bintopsy-findings/1`) in an extension segment |
+
+*Enricher*: appends extension segments (Section 4.6) without producing a capture.
 
 To list another implementation, open a pull request.
 

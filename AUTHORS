@@ -14,7 +14,8 @@ Contributions are welcome. Open a pull request at
 <https://github.com/MemorySlice/memslice-spec/> and your name will be added
 to this list, ordered by first contribution.
 
-- Ricardo J. Rodríguez — Thread Context block (Section 5.7), PR #1
+- Ricardo J. Rodríguez — Thread Context block (Section 5.7), PR #1; Analysis
+  Findings block (Section 5.12) and Implementations list, PR #2
 
 ---
 

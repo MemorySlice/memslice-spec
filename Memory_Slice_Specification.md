@@ -51,6 +51,7 @@ This specification accompanies the research paper *Memory Slice: A Process-Centr
    - 5.9 Physical Memory Map (`0x0059`)
    - 5.10 Module Build-ID Manifest (`0x005A`)
    - 5.11 Region Omission Manifest (`0x005B`)
+   - 5.12 Analysis Findings (`0x1B70`)
 6. **Investigation Mode**
    - 6.1 Block Ordering
    - 6.2 System Context Block (`0x0050`)
@@ -189,7 +190,7 @@ Either mode **MAY** set the `Encrypted` flag (bit 2), activating full-container 
 5. **Dual Acquisition Modes.** Analysis mode for research; Investigation mode for forensic investigations.
 6. **Confidentiality.** Full-container AEAD encryption with post-quantum key encapsulation.
 
-Capture-time blocks are optimized for streaming, append-only acquisition. The Structural namespace (`0x1000`–`0x1FFF`) holds derived views of the capture—virtual address maps, seek tables, pointer graphs—that enable efficient random access. Such blocks are written either at capture time (before the End-of-Capture block) or afterwards in extension segments (Section 4.6), which leave the capture segment byte-for-byte untouched.
+Capture-time blocks are optimized for streaming, append-only acquisition. The Structural namespace (`0x1000`–`0x1FFF`) holds derived views of the capture—virtual address maps, seek tables, pointer graphs—that enable efficient random access, and analysis results (Section 5.12). Such blocks are written either at capture time (before the End-of-Capture block) or afterwards in extension segments (Section 4.6), which leave the capture segment byte-for-byte untouched.
 
 ### 2.3 Scope of the Integrity Guarantee
 
@@ -282,7 +283,7 @@ All multi-byte structural integers are little-endian (`Endianness=0x01`). Memory
 
 ### 3.4 Version Compatibility
 
-Unknown major version: **SHOULD** reject. Unknown minor of a known major: **MUST** parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via `BlockLength`, reserved fields ignored). Files that use any feature introduced in version 1.1 (extension segments, EoC `BlockCount`, `HashAlgo`, Thread Context, VAS Map `NameSource`, blocks `0x0054` and `0x0059`–`0x005B`, page state NotResident) **SHOULD** set `Version` to `0x0101`; files written as `0x0100` remain valid. Patch revisions (e.g., 1.1.1) do not change `Version`, which stays `0x0101` (there is no patch byte); they correct errata and define semantics for reserved fields whose zero value preserves the prior meaning. A 1.1.0 consumer computes the AAD over the unzeroed header and therefore cannot decrypt files with `CipherLen≠0` (Section 10.2); files with `CipherLen=0` are unaffected. A consumer whose tag verification fails on such a file **SHOULD** report that it may require 1.1.1 support rather than tampering (Section 10.2). Always use `HeaderSize` to locate Block 0.
+Unknown major version: **SHOULD** reject. Unknown minor of a known major: **MUST** parse; minor revisions only add block types, reserved-field semantics, and optional structures, all of which a consumer of an earlier minor skips by the usual rules (unknown block types via `BlockLength`, reserved fields ignored). Files that use any feature introduced in version 1.1 (extension segments, EoC `BlockCount`, `HashAlgo`, Thread Context, VAS Map `NameSource`, blocks `0x0054` and `0x0059`–`0x005B`, page state NotResident) **SHOULD** set `Version` to `0x0101`; files written as `0x0100` remain valid. Patch revisions (e.g., 1.1.1) do not change `Version`, which stays `0x0101` (there is no patch byte); they correct errata and define semantics for reserved fields whose zero value preserves the prior meaning. They **MAY** also register Structural block types (`0x1000`–`0x1FFF`) that are confined to extension segments, such as Analysis Findings (`0x1B70`): a tool appending such a block cannot change the header `Version` (producer rule 33), and every consumer of major 1 already skips the type via `BlockLength`. A 1.1.0 consumer computes the AAD over the unzeroed header and therefore cannot decrypt files with `CipherLen≠0` (Section 10.2); files with `CipherLen=0` are unaffected. A consumer whose tag verification fails on such a file **SHOULD** report that it may require 1.1.1 support rather than tampering (Section 10.2). Always use `HeaderSize` to locate Block 0.
 
 **Table 6: Target platform codes: (a) OS and (b) CPU.**
 
@@ -384,8 +385,10 @@ When the `Compressed` flag is set, only the payload portion (bytes after the 80-
 | Range | Namespace | Writer | Examples |
 |---|---|---|---|
 | `0x0000`–`0x0FFF` | Capture-Time | Acquirer/Importer in the capture segment; enrichment tools for the types Section 4.6 permits in extension segments | Regions, modules, keys, system context |
-| `0x1000`–`0x1FFF` | Structural   | Acquirer, importer, or analysis tool; capture segment or extension segment | VAS map, pointer graph |
+| `0x1000`–`0x1FFF` | Structural   | Acquirer, importer, or analysis tool; capture segment or extension segment | VAS map, pointer graph, analysis findings |
 | `0x2000`–`0xFFFF` | Reserved     | —                 | Future versions |
+
+**Allocation.** Registered Structural types are assigned in this document; `0x1800`–`0x1FFF` is reserved for producer-defined Structural types that are not registered here (e.g., a tool-specific index or seek table). A registered type keeps its number permanently. `0x1B70` predates this rule and is grandfathered as a registered type.
 
 **Table 11: Defined block types.**
 
@@ -489,7 +492,7 @@ The capture segment is the evidence: everything from Block 0 through the End-of-
 | `+0x32` | 6   | `Reserved2`   | R    | Zero. |
 | `+0x38` | var | `Producer`    | —    | UTF-8, pad8. Name and version of the appending tool (e.g., `memslicer-enrich/0.5.0`). Omitted when `ProducerLen`=0. |
 
-**Permitted block types.** Extension segments carry derived or supplementary data, never evidence. The following types **MUST NOT** appear in an extension segment: Memory Region (`0x0001`), Module Entry (`0x0002`), `0x0010`–`0x0015`, Import Provenance (`0x0030`), Process Identity (`0x0040`), `0x0050`–`0x0058`, and End-of-Capture (`0x0FFF`). Permitted types are Key Hint (`0x0020`), Related Dump (`0x0041`), `0x0059`–`0x005B` (Sections 5.9–5.11), and the Structural namespace (`0x1000`–`0x1FFF`). Block types whose payload this specification does not define (e.g., Pointer Graph `0x1003`, producer-defined Structural types) **MAY** appear only in extension segments. Blocks in an extension segment **MAY** reference blocks in the capture segment or in earlier segments by `ParentUUID` or payload-embedded UUID (Section 8).
+**Permitted block types.** Extension segments carry derived or supplementary data, never evidence. The following types **MUST NOT** appear in an extension segment: Memory Region (`0x0001`), Module Entry (`0x0002`), `0x0010`–`0x0015`, Import Provenance (`0x0030`), Process Identity (`0x0040`), `0x0050`–`0x0058`, and End-of-Capture (`0x0FFF`). Permitted types are Key Hint (`0x0020`), Related Dump (`0x0041`), `0x0059`–`0x005B` (Sections 5.9–5.11), and the Structural namespace (`0x1000`–`0x1FFF`), of which Analysis Findings (`0x1B70`, Section 5.12) **MUST NOT** appear anywhere else. Block types whose payload this specification does not define (e.g., Pointer Graph `0x1003`, producer-defined Structural types) **MAY** appear only in extension segments. Blocks in an extension segment **MAY** reference blocks in the capture segment or in earlier segments by `ParentUUID` or payload-embedded UUID (Section 8). Because an appender cannot modify earlier bytes, the `HasChildren` and `HasKeyHints` flags of a block in the capture segment are never set by blocks that reference it from an extension segment; consumers **MUST NOT** rely on these flags to discover extension-segment children.
 
 **Producer rules.** A producer appending an extension segment **MUST NOT** modify any byte of the header, the capture segment, or an existing segment; **MUST** terminate every segment it writes with an End-of-Extension block; **MUST** continue the `PrevHash` chain from the last block already in the file (zero when encrypted); and **MUST** write the exact `BlockCount` and `SegmentHash`. A producer that finds trailing data after the last verified segment **SHOULD** refuse to append rather than build on unverified bytes. In an encrypted container, extension segments written before sealing **MUST** lie inside the primary AEAD ciphertext, i.e., be written before the AEAD is finalized; after sealing, a producer **MUST** append only sealed extension segments (Section 10.8).
 
@@ -825,7 +828,7 @@ Unlike the general convention of Section 1.3, the strings in this block carry **
 
 ### 5.12 Analysis Findings (`0x1B70`)
 
-An Analysis Findings block carries the results an analysis tool derived from a slice—static triage of a captured image, behaviour observed under emulation, indicators of compromise, rebuilt import tables, technique mappings—as a JSON document tagged with a schema identifier. It is the registered carrier for tool results in the Structural namespace: a tool that needs no dedicated binary layout **SHOULD** use this block with its own schema rather than allocate a producer-defined type. The block **MUST** appear only in extension segments (Section 4.6); it never modifies or replaces capture-time data. Several Analysis Findings blocks **MAY** coexist (different tools, different runs of the same tool); readers present them in file order. `ParentUUID` is zero, or the `BlockUUID` of the block the findings are about (e.g., a Memory Region holding the analysed image).
+An Analysis Findings block carries the results an analysis tool derived from a slice—static triage of a captured image, behaviour observed under emulation, indicators of compromise, rebuilt import tables, technique mappings—as a JSON document tagged with a schema identifier. It is the registered carrier for tool results in the Structural namespace: a tool that needs no dedicated binary layout **SHOULD** use this block with its own schema rather than allocate a producer-defined type. The block **MUST** appear only in extension segments (Section 4.6); it never modifies or replaces capture-time data. Several Analysis Findings blocks **MAY** coexist (different tools, different runs of the same tool); readers present them in file order. `ParentUUID` is zero, or the `BlockUUID` of the block the findings are about (e.g., a Memory Region holding the analysed image). Section 4.6 explains why the parent's `HasChildren` flag is not set.
 
 **Table 19h: Analysis Findings payload.**
 
@@ -834,10 +837,10 @@ An Analysis Findings block carries the results an analysis tool derived from a s
 | `+0x00` | 4   | `JsonLen`   | JL  | Byte length of `Json` before padding (no NUL). |
 | `+0x04` | 2   | `SchemaLen` | ScL | Length of `Schema` incl. NUL. **MUST** be ≥ 2. |
 | `+0x06` | 2   | `Reserved`  | R   | Zero. |
-| `+0x08` | var | `Schema`    | —   | UTF-8, NUL-terminated, pad8. Identifies the document layout as `<producer>-<document>/<major>`, e.g., `bintopsy-findings/1`. A consumer that does not know the schema **MAY** still present the JSON opaquely. |
-| `+s`    | var | `Json`      | —   | UTF-8 JSON text, pad8 (zero padding; not part of the document). **MUST** be a single JSON object. |
+| `+0x08` | var | `Schema`    | —   | UTF-8, NUL-terminated, pad8. Identifies the document layout as `<producer>-<document>/<major>`, e.g., `bintopsy-findings/1`. A consumer that does not know the schema **MAY** still present the JSON opaquely. Lowercase `[a-z0-9-]` for `<producer>` and `<document>`, decimal `<major>` without leading zeros; compared byte-for-byte. `<producer>` **SHOULD** equal the tool name used in the segment's End-of-Extension `Producer`. |
+| `+s`    | var | `Json`      | —   | UTF-8 JSON text (RFC 8259), pad8. Unlike Section 1.3, `Json` carries **no** terminating NUL and **MUST NOT** contain a byte order mark or `0x00`; `JsonLen` is authoritative. **MUST** be a single JSON object. |
 
-**Schema conventions.** The `<major>` component changes only when a document is no longer readable by a consumer of the previous major; additive changes keep it. The JSON object **SHOULD** carry a `sample` member describing what was analysed in terms a reader can join back to the capture (module base address, region base, or the slice's process identity) and **MAY** carry a `report` member with a path or URI to a human-readable rendering. Timestamps and the producing tool's name and version are already recorded by the End-of-Extension block that terminates the segment (Table 12a) and need not be repeated.
+**Schema conventions.** The `<major>` component changes only when a document is no longer readable by a consumer of the previous major; additive changes keep it. The block's `PayloadVersion` (Table 7) versions this table's layout and stays `0x0001`; the schema `<major>` versions the JSON document. Integers that may exceed 2^53 (addresses, hashes) **SHOULD** be encoded as `0x`-prefixed hexadecimal strings so that consumers limited to IEEE-754 doubles read them exactly (I-JSON, RFC 7493). The JSON object **SHOULD** carry a `sample` member describing what was analysed in terms a reader can join back to the capture (module base address, region base, or the slice's process identity) and **MAY** carry a `report` member with a path or URI to a human-readable rendering. A producer that emits this block **SHOULD** write a non-empty `Producer` and a non-zero `WrittenAt` in the segment's End-of-Extension block (Table 12a); when a segment carries findings from more than one tool, each document **SHOULD** also carry a `tool` member (`<name>/<version>`).
 
 **Registered schemas.**
 
@@ -1046,7 +1049,7 @@ A NotResident page carries no data exactly like Failed and Unmapped. Readers tha
 
 ## 8. Block Cross-Referencing
 
-**Layer 1: `ParentUUID`.** Header-level hierarchy. Module Entry → Module List; system tables → System Context.
+**Layer 1: `ParentUUID`.** Header-level hierarchy. Module Entry → Module List; system tables → System Context; Thread Context → Process Identity (optional); Analysis Findings → the block analysed (optional, Section 5.12).
 
 **Layer 2: Payload-embedded UUIDs.** Key Hint `RegionUUID` → Memory Region.
 
@@ -1321,6 +1324,8 @@ A conformant acquirer **MUST** emit Process Identity as Block 0 and Module List 
 
 **Register names:** (42) name Thread Context registers per Table 19g for the architectures it lists, and never write aliases (ARM64 `fp`/`lr`; ARM32 `r13`–`r15`).
 
+**Analysis Findings:** (43) emit `0x1B70` only in extension segments, with `SchemaLen` ≥ 2, a `Schema` matching Section 5.12, and `Json` a single UTF-8 JSON object without BOM or NUL; (44) **SHOULD** set `Producer` and `WrittenAt` in the terminating End-of-Extension block.
+
 A producer **SHOULD** emit an EoC block. `FileHash` **SHOULD** be computed over plaintext even when encrypted. When encrypted, the producer **SHOULD** record an external file hash for chain-of-custody.
 
 ### 14.2 Consumer
@@ -1346,6 +1351,8 @@ A conformant consumer **MUST**: (1) reject invalid magic or `Endianness≠0x01`;
 **Sealed extension segments:** (28) verify sealed segments in order per Section 10.8; **MUST NOT** present plaintext from a sealed segment before its tag verifies; treat everything from the first failing segment to EOF as trailing data.
 
 **Register names:** (29) **SHOULD** normalise ARM64 `fp`→`x29` and `lr`→`x30` in Thread Context blocks written by 1.1.0 producers.
+
+**Analysis Findings:** (30) **MUST NOT** reject an Analysis Findings block because its `Schema` is unknown; present the JSON opaquely or skip it; (31) locate `Json` by `JsonLen`, never by NUL scanning.
 
 A consumer **SHOULD**: verify the `PrevHash` chain when unencrypted; verify EoC `FileHash` after decryption.
 
@@ -1377,7 +1384,8 @@ A consumer **SHOULD**: verify the `PrevHash` chain when unencrypted; verify EoC 
 
 **1.1.2 — 2026-10-30.** Patch revision; the header `Version` remains `0x0101` (Section 3.4).
 
-- **Analysis Findings** (`0x1B70`, Section 5.12, Table 19h): a registered Structural block carrying tool results as a schema-tagged JSON document (`JsonLen`, `SchemaLen`, `Schema`, `Json`), extension segments only; first registered schema `bintopsy-findings/1`. Tools no longer need a producer-defined type each; a 1.1.1 consumer skips the block via `BlockLength` as before.
+- **Analysis Findings** (`0x1B70`, Section 5.12, Table 19h): a registered Structural block carrying tool results as a schema-tagged JSON document (`JsonLen`, `SchemaLen`, `Schema`, `Json`), extension segments only; first registered schema `bintopsy-findings/1`. Tools no longer need a producer-defined type each; a 1.1.1 consumer skips the block via `BlockLength` as before. Contributed by Ricardo J. Rodríguez (PR #2). Producer rules 43–44; consumer rules 30–31.
+- **Editorial (2026-11-04):** Section 3.4 permits patch revisions to register extension-only Structural types; Section 4.3 allocation rule with producer-defined range `0x1800`–`0x1FFF`; Section 4.6 names `0x1B70` and clarifies `HasChildren`/`HasKeyHints` for extension references; Section 5.12 schema grammar, JSON encoding rules, and End-of-Extension provenance recommendation.
 
 **1.1.1 — 2026-10-23.** Patch revision; the header `Version` remains `0x0101` (Section 3.4).
 
